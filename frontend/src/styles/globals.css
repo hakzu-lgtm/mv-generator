@@ -1,0 +1,130 @@
+@import "tailwindcss";
+
+:root {
+  --color-primary:        #2C1A0A;
+  --color-card:           #4A2C14;
+  --color-elevated:       #5A3820;
+  --color-orange:         #F97316;
+  --color-amber:          #F59E0B;
+  --color-gold:           #D97706;
+  --color-green:          #10B981;
+  --color-red:            #EF4444;
+  --color-text-primary:   #FEF3E2;
+  --color-text-secondary: #C9A882;
+  --color-border:         #6B3E22;
+}
+
+* { box-sizing: border-box; }
+
+html, body, #root {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: 'Pretendard', system-ui, -apple-system, sans-serif;
+  background-color: #2C1A0A;
+  color: #FEF3E2;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ── Scrollbar ──────────────────────────────────────────── */
+::-webkit-scrollbar       { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: #3A2212; }
+::-webkit-scrollbar-thumb {
+  background: #6B4226;
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover { background: #8B5E3C; }
+
+/* ── Audio wave animation ──────────────────────────────── */
+.wave-bar {
+  display: inline-block;
+  width: 3px;
+  border-radius: 2px;
+  background: #F97316;
+  animation: wave 1.5s ease-in-out infinite;
+}
+.wave-bar:nth-child(2) { animation-delay: 0.15s; }
+.wave-bar:nth-child(3) { animation-delay: 0.3s; }
+.wave-bar:nth-child(4) { animation-delay: 0.45s; }
+.wave-bar:nth-child(5) { animation-delay: 0.6s; }
+
+@keyframes wave {
+  0%, 100% { transform: scaleY(0.4); opacity: 0.6; }
+  50%       { transform: scaleY(1.6); opacity: 1; }
+}
+
+/* ── Card hover ─────────────────────────────────────────── */
+.card-hover { transition: all 0.2s ease; }
+.card-hover:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 24px rgba(249, 115, 22, 0.15);
+}
+
+/* ── Gradient text ──────────────────────────────────────── */
+.gradient-text {
+  background: linear-gradient(135deg, #F97316, #F59E0B);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+/* ── Glass card ─────────────────────────────────────────── */
+.glass-card {
+  background: rgba(74, 44, 20, 0.85);
+  backdrop-filter: blur(12px);
+  border: 1px solid rgba(107, 62, 34, 0.9);
+}
+
+/* ── Button primary (orange) ────────────────────────────── */
+.btn-primary {
+  background: linear-gradient(135deg, #F97316, #EA580C);
+  transition: all 0.2s ease;
+}
+.btn-primary:hover:not(:disabled) {
+  opacity: 0.92;
+  transform: translateY(-1px);
+  box-shadow: 0 4px 20px rgba(249, 115, 22, 0.45);
+}
+.btn-primary:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+  transform: none;
+}
+
+/* ── Chorus gold glow ──────────────────────────────────── */
+.chorus-glow { box-shadow: 0 0 14px rgba(245, 158, 11, 0.35); }
+
+/* ── Progress bar shimmer (orange) ────────────────────── */
+@keyframes shimmer {
+  0%   { background-position: -200% center; }
+  100% { background-position:  200% center; }
+}
+.shimmer {
+  background: linear-gradient(90deg, #F97316 0%, #F59E0B 50%, #F97316 100%);
+  background-size: 200% auto;
+  animation: shimmer 2s linear infinite;
+}
+
+/* ── SSE log fade ───────────────────────────────────────── */
+.sse-log-item { animation: fadeIn 0.3s ease-in-out; }
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* ── Premium glow ring (orange) ────────────────────────── */
+.glow-orange {
+  box-shadow:
+    0 0 0 1px rgba(249, 115, 22, 0.3),
+    0 0 24px rgba(249, 115, 22, 0.12);
+}
+
+/* ── Luxury divider ─────────────────────────────────────── */
+.divider-gold {
+  height: 1px;
+  background: linear-gradient(90deg, transparent, #D97706, transparent);
+}

@@ -1,0 +1,388 @@
+import json
+import os
+import asyncio
+import time
+from fastapi import APIRouter, HTTPException
+from fastapi.responses import StreamingResponse
+from pydantic import BaseModel
+from typing import Optional
+import config
+from utils import cost_guard
+
+router = APIRouter(prefix="/api/video", tags=["video"])
+
+VEO_MODEL         = "veo-3.1-fast-generate-001"
+VEO_LOCATION      = "us-central1"
+VEO_DURATION      = 8
+VEO_COST_PER_S    = 0.15
+POLL_INTERVAL     = 15        # 폴링 간격(초)
+POLL_TIMEOUT      = 600       # 최대 10분
+SCENE_DELAY_SEC   = 30        # 씬 간 기본 대기 (할당량 예방)
+QUOTA_WAIT_BASE   = 60        # 429 시 첫 대기(초), 이후 60씩 증가
+QUOTA_MAX_RETRIES = 5
+
+CAMERA_MAP = {
+    "인트로":  "slow dolly forward, establishing shot",
+    "벌스":    "tracking shot, medium close-up",
+    "코러스":  "dynamic dolly, wide angle, fast cuts",
+    "브릿지":  "crane shot, overhead aerial",
+    "아웃트로":"slow pull back, fade out",
+}
+
+# ── 안전 필터 대응 ────────────────────────────────────────────────
+
+SENSITIVE_REPLACE = {
+    "blood": "red light", "weapon": "object", "gun": "object",
+    "knife": "tool", "kill": "stop", "killed": "stopped",
+    "killing": "stopping", "death": "ending", "dead": "still",
+    "die": "fade away", "dying": "fading",
+    "fight": "intense moment", "fighting": "tense scene",
+    "violence": "tension", "violent": "intense",
+    "wound": "mark", "attack": "approach", "attacked": "approached",
+    "destroy": "transform", "war": "conflict scene",
+    "murder": "mystery", "revenge": "resolution",
+    "betrayal": "dramatic turn", "hate": "strong emotion",
+    "cruel": "cold", "brutal": "intense",
+    "피": "붉은 빛", "죽": "사라지", "살": "이야기",
+    "칼": "도구", "총": "물체", "복수": "화해",
+    "배신": "이별", "폭력": "갈등", "잔인": "냉정",
+}
+
+SAFETY_SUFFIX = (
+    ", cinematic artistic composition, tasteful visuals, "
+    "safe for all audiences, peaceful emotional tone, "
+    "poetic and metaphorical, non-violent"
+)
+
+
+def sanitize_video_prompt(prompt: str) -> str:
+    result = prompt.lower()
+    for bad, safe in SENSITIVE_REPLACE.items():
+        result = result.replace(bad.lower(), safe)
+    return result + SAFETY_SUFFIX
+
+
+def _is_safety_error(err: str) -> bool:
+    return any(x in err for x in (
+        "code': 3", "code: 3", "INVALID_ARGUMENT",
+        "sensitive", "Responsible AI", "safety",
+        "violat", "inappropriate", "harmful",
+    ))
+
+
+def _is_quota_error(err: str) -> bool:
+    return any(x in err for x in (
+        "429", "RESOURCE_EXHAUSTED", "Quota exceeded",
+        "quota", "rate limit", "Rate limit",
+    ))
+
+
+# ── Veo 클라이언트 ────────────────────────────────────────────────
+
+def _veo_client():
+    from google import genai
+    return genai.Client(
+        vertexai=True,
+        project=config.get_project_id(),
+        location=VEO_LOCATION,
+    )
+
+
+# ── 프롬프트 빌더 ─────────────────────────────────────────────────
+
+def build_video_prompt(scene: dict, char_base: str, style_kw: str) -> str:
+    section   = scene.get("section", "벌스")
+    camera    = CAMERA_MAP.get(section, "medium shot, smooth movement")
+    is_chorus = scene.get("is_chorus", False)
+    energy    = "dynamic, high energy, cinematic" if is_chorus else "smooth, atmospheric, peaceful"
+    beat      = scene.get("beat", "")
+    mood      = scene.get("mood", "")
+    desc      = scene.get("description", "character in scenic environment")
+    mood_note = f" Scene mood: {mood}." if mood else ""
+    return (
+        f"{char_base}, {desc}, {camera}, {style_kw}, "
+        f"{energy}, 16:9, cinematic quality.{mood_note}"
+    )
+
+
+# ── 영상 저장 (Vertex AI 호환) ────────────────────────────────────
+
+def _save_video(client, gen_video, save_path: str):
+    """
+    Vertex AI 모드에서 영상을 저장한다.
+    client.files.download()는 Gemini Developer 전용이므로 사용 금지.
+    video_bytes 직접 저장 → GCS URI 다운로드 순으로 시도.
+    """
+    video_obj = gen_video.video
+    os.makedirs(os.path.dirname(os.path.abspath(save_path)), exist_ok=True)
+
+    # 방식 A: video_bytes 직접 (응답에 포함된 경우)
+    if hasattr(video_obj, "video_bytes") and video_obj.video_bytes:
+        with open(save_path, "wb") as f:
+            f.write(video_obj.video_bytes)
+        return
+
+    # 방식 B: GCS URI 다운로드
+    uri = getattr(video_obj, "uri", None)
+    if uri and uri.startswith("gs://"):
+        from google.cloud import storage as gcs
+        parts       = uri.replace("gs://", "").split("/", 1)
+        bucket_name = parts[0]
+        blob_path   = parts[1] if len(parts) > 1 else ""
+        gcs.Client(project=config.get_project_id()) \
+            .bucket(bucket_name) \
+            .blob(blob_path) \
+            .download_to_filename(save_path)
+        return
+
+    raise RuntimeError(
+        f"영상 데이터 없음 (video_bytes={bool(getattr(video_obj,'video_bytes',None))}, "
+        f"uri={getattr(video_obj,'uri',None)})"
+    )
+
+
+# ── 핵심 생성 함수 ────────────────────────────────────────────────
+
+def _call_veo_once(client, prompt: str, input_image, gen_cfg) -> object:
+    """Veo 호출 + 폴링. 반환: GeneratedVideo 객체."""
+    from google.genai import types
+    operation = client.models.generate_videos(
+        model=VEO_MODEL,
+        prompt=prompt,
+        image=input_image,
+        config=gen_cfg,
+    )
+    elapsed = 0
+    while not operation.done:
+        if elapsed >= POLL_TIMEOUT:
+            raise TimeoutError(f"Veo 타임아웃 ({POLL_TIMEOUT//60}분 초과)")
+        time.sleep(POLL_INTERVAL)
+        elapsed += POLL_INTERVAL
+        operation = client.operations.get(operation)
+
+    if operation.error:
+        raise RuntimeError(f"Veo 오류: {operation.error}")
+    if not operation.response or not operation.response.generated_videos:
+        raise RuntimeError("Veo 응답에 영상 없음")
+    return operation.response.generated_videos[0]
+
+
+def _generate_one_clip(prompt: str, img_path: str, clip_path: str) -> tuple:
+    """
+    안전 필터 3단계 순화 + 할당량 재시도.
+    반환: (duration_float, 사용된_단계_label)
+    """
+    from google import genai
+    from google.genai import types
+
+    client      = _veo_client()
+    input_image = None
+    if img_path and os.path.exists(img_path) and os.path.getsize(img_path) > 100:
+        with open(img_path, "rb") as f:
+            input_image = types.Image(image_bytes=f.read(), mime_type="image/png")
+
+    gen_cfg = types.GenerateVideosConfig(
+        duration_seconds=VEO_DURATION,
+        aspect_ratio="16:9",
+        resolution="720p",
+        number_of_videos=1,
+    )
+
+    sanitized = sanitize_video_prompt(prompt)
+    prompts   = [
+        ("1차 순화", sanitized),
+        ("2차 순화", sanitized + ", soft poetic atmosphere, gentle abstract visuals, metaphorical calm"),
+        ("3차 최소화", "A character in a cinematic scene, peaceful artistic mood, soft lighting, emotional expression, tasteful, safe for all audiences"),
+    ]
+
+    for label, p in prompts:
+        # 할당량 재시도
+        for attempt in range(QUOTA_MAX_RETRIES):
+            try:
+                gen_video = _call_veo_once(client, p, input_image, gen_cfg)
+                _save_video(client, gen_video, clip_path)
+                print(f"[video] [OK] {label} (시도 {attempt+1})")
+                return float(VEO_DURATION), label
+
+            except Exception as e:
+                err = str(e)
+
+                if _is_quota_error(err):
+                    wait = QUOTA_WAIT_BASE * (attempt + 1)
+                    print(f"[video] [WAIT] 할당량 초과, {wait}초 대기 후 재시도...")
+                    time.sleep(wait)
+                    continue
+
+                if _is_safety_error(err):
+                    print(f"[video] [WARN] 안전필터 차단 ({label}) → 다음 단계")
+                    break  # 다음 순화 단계로
+
+                raise  # 그 외 에러는 즉시 올림
+
+    raise RuntimeError(f"안전필터 3단계 + 할당량 재시도 모두 실패")
+
+
+# ── SSE 영상 생성 루프 ────────────────────────────────────────────
+
+async def sse_video_generate(pid: str, scenes: list, char_base: str, style_kw: str):
+    total_seconds = len(scenes) * VEO_DURATION
+    total_cost    = total_seconds * VEO_COST_PER_S
+
+    ok, _ = cost_guard.can_proceed(pid, total_cost)
+    if not ok:
+        yield f"data: {json.dumps({'type': 'error', 'message': '안전 한도 초과'})}\n\n"
+        return
+
+    yield f"data: {json.dumps({'type': 'start', 'total_scenes': len(scenes), 'estimated_cost': round(total_cost, 2), 'model': VEO_MODEL, 'scene_delay': SCENE_DELAY_SEC})}\n\n"
+
+    results          = []
+    accumulated_cost = 0.0
+    success_n        = 0
+    fail_n           = 0
+
+    for i, scene in enumerate(scenes):
+        prompt    = build_video_prompt(scene, char_base, style_kw)
+        img_path  = os.path.join(config.get_output_path("04_images"), f"scene_{i:03d}_{pid}.png")
+        clip_path = os.path.join(config.get_output_path("05_clips"),  f"clip_{i:03d}_{pid}.mp4")
+
+        yield f"data: {json.dumps({'type': 'progress', 'scene': i, 'total': len(scenes), 'message': f'씬 {i+1}/{len(scenes)} — Veo 생성 중 (최대 {POLL_TIMEOUT//60}분)...'})}\n\n"
+
+        actual_duration = 0.0
+        used_label      = ""
+        success         = False
+        safety_blocked  = False
+        err_msg         = ""
+
+        try:
+            actual_duration, used_label = await asyncio.to_thread(
+                _generate_one_clip, prompt, img_path, clip_path
+            )
+            success = True
+            success_n += 1
+        except Exception as e:
+            err_msg = str(e)
+            fail_n += 1
+            safety_blocked = "안전필터" in err_msg or _is_safety_error(err_msg)
+
+        if success:
+            scene_cost = actual_duration * VEO_COST_PER_S
+            cost_guard.record(pid, "veo", scene_cost)
+            accumulated_cost += scene_cost
+            yield f"data: {json.dumps({'type': 'scene_done', 'scene': i, 'success': True, 'label': used_label, 'message': f'[OK] 씬 {i+1} 완료 ({used_label})', 'cost': round(scene_cost, 2), 'accumulated': round(accumulated_cost, 2)})}\n\n"
+        else:
+            tag = '[안전필터]' if safety_blocked else '[ERROR]'
+            yield f"data: {json.dumps({'type': 'scene_done', 'scene': i, 'success': False, 'safety_blocked': safety_blocked, 'message': f'{tag} 씬 {i+1} 실패: {err_msg[:150]}'})}\n\n"
+
+        results.append({
+            "scene_id":       i,
+            "file":           os.path.basename(clip_path) if success else "",
+            "duration":       actual_duration,
+            "is_chorus":      scene.get("is_chorus", False),
+            "section":        scene.get("section", ""),
+            "cost":           actual_duration * VEO_COST_PER_S if success else 0,
+            "success":        success,
+            "safety_blocked": safety_blocked if not success else False,
+        })
+
+        # 씬 간 기본 대기 (할당량 예방, 마지막 씬 제외)
+        if i < len(scenes) - 1:
+            yield f"data: {json.dumps({'type': 'progress', 'message': f'{SCENE_DELAY_SEC}초 대기 중 (Veo 할당량 예방)...'})}\n\n"
+            await asyncio.sleep(SCENE_DELAY_SEC)
+
+    clips_meta = {
+        "project_id": pid, "clips": results,
+        "total_cost": accumulated_cost,
+        "char_base": char_base, "style": style_kw,
+    }
+    with open(os.path.join(config.get_output_path("05_clips"), f"clips_meta_{pid}.json"), "w", encoding="utf-8") as f:
+        json.dump(clips_meta, f, ensure_ascii=False, indent=2)
+
+    summary = f"완료: 성공 {success_n}개 / 실패 {fail_n}개"
+    yield f"data: {json.dumps({'type': 'complete', 'clips': results, 'success': success_n, 'failed': fail_n, 'summary': summary, 'total_cost': round(cost_guard.get_total(pid), 2)})}\n\n"
+
+
+# ── Request Models & Routes ───────────────────────────────────────
+
+class VideoGenerateRequest(BaseModel):
+    project_id: str
+    char_base_prompt: str
+    style: str
+
+
+class RegenerateSceneRequest(BaseModel):
+    project_id: str
+    scene_id: int
+    instruction: Optional[str] = None
+    char_base_prompt: str
+    style: str
+
+
+@router.post("/generate")
+async def generate_video(req: VideoGenerateRequest):
+    if not config.is_ready():
+        raise HTTPException(status_code=400, detail="Project ID가 설정되지 않았습니다")
+
+    scenes_path = os.path.join(config.get_output_path("04_images"), f"scenes_{req.project_id}.json")
+    if not os.path.exists(scenes_path):
+        raise HTTPException(status_code=404, detail="씬 데이터를 찾을 수 없습니다")
+
+    with open(scenes_path, "r", encoding="utf-8") as f:
+        scenes_data = json.load(f)
+
+    from routes.images import STYLE_KEYWORDS
+    style_kw = STYLE_KEYWORDS.get(req.style, req.style)
+
+    return StreamingResponse(
+        sse_video_generate(req.project_id, scenes_data["scenes"], req.char_base_prompt, style_kw),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@router.post("/regenerate/{scene_id}")
+async def regenerate_scene(scene_id: int, req: RegenerateSceneRequest):
+    if not config.is_ready():
+        raise HTTPException(status_code=400, detail="Project ID가 설정되지 않았습니다")
+
+    scene_cost = VEO_DURATION * VEO_COST_PER_S
+    ok, _ = cost_guard.can_proceed(req.project_id, scene_cost)
+    if not ok:
+        raise HTTPException(status_code=403, detail="안전 한도 초과")
+
+    scenes_path = os.path.join(config.get_output_path("04_images"), f"scenes_{req.project_id}.json")
+    with open(scenes_path, "r", encoding="utf-8") as f:
+        scenes_data = json.load(f)
+
+    scene = scenes_data["scenes"][scene_id]
+    if req.instruction:
+        scene["description"] = req.instruction
+
+    from routes.images import STYLE_KEYWORDS
+    style_kw  = STYLE_KEYWORDS.get(req.style, req.style)
+    prompt    = build_video_prompt(scene, req.char_base_prompt, style_kw)
+    clip_path = os.path.join(config.get_output_path("05_clips"), f"clip_{scene_id:03d}_{req.project_id}.mp4")
+    img_path  = os.path.join(config.get_output_path("04_images"), f"scene_{scene_id:03d}_{req.project_id}.png")
+
+    try:
+        duration, label = await asyncio.to_thread(_generate_one_clip, prompt, img_path, clip_path)
+        cost_guard.record(req.project_id, "veo", duration * VEO_COST_PER_S)
+    except Exception as e:
+        err = str(e)
+        tag = "안전필터" if (_is_safety_error(err) or "안전필터" in err) else "생성 실패"
+        raise HTTPException(status_code=500, detail=f"Veo {tag}: {err[:300]}")
+
+    return {
+        "success": True, "scene_id": scene_id,
+        "file": os.path.basename(clip_path),
+        "cost": duration * VEO_COST_PER_S,
+        "total_cost": cost_guard.get_total(req.project_id),
+    }
+
+
+@router.get("/meta/{project_id}")
+async def get_clips_meta(project_id: str):
+    meta_path = os.path.join(config.get_output_path("05_clips"), f"clips_meta_{project_id}.json")
+    if not os.path.exists(meta_path):
+        raise HTTPException(status_code=404, detail="클립 메타데이터를 찾을 수 없습니다")
+    with open(meta_path, "r", encoding="utf-8") as f:
+        return json.load(f)
