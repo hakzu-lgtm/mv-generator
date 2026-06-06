@@ -14,9 +14,18 @@ def wav_to_mp3(wav_path: str, mp3_path: str, bitrate: str = "192k") -> str:
 
 def get_audio_duration(path: str) -> float:
     try:
+        import json as _json
+        result = subprocess.run(
+            ["ffprobe", "-v", "quiet", "-print_format", "json", "-show_format", path],
+            capture_output=True, text=True, timeout=30,
+        )
+        if result.returncode == 0:
+            return float(_json.loads(result.stdout)["format"]["duration"])
+    except Exception:
+        pass
+    try:
         import librosa
-        duration = librosa.get_duration(path=path)
-        return duration
+        return librosa.get_duration(path=path)
     except Exception:
         return 0.0
 

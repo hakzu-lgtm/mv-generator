@@ -1,7 +1,37 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 
-const generateId = () => Math.random().toString(36).slice(2, 10)
+const generateProjectId = () => {
+  const now = new Date()
+  const pad = (n, len = 2) => String(n).padStart(len, '0')
+  const date = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}`
+  const time = `${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`
+  const rand = Math.random().toString(36).slice(2, 6)
+  return `proj_${date}_${time}_${rand}`
+}
+
+const EMPTY_PROJECT_STATE = {
+  currentStep: 1,
+  completedSteps: [],
+  lyricsConfig: {
+    genre: ['K-POP'],
+    vocalist: { gender: '여성', age: '20대', style: '청아한' },
+    music: { bpm: 120, instruments: ['피아노', '신시사이저'] },
+    theme: '',
+  },
+  lyrics: null,
+  story: null,
+  music: null,
+  selectedStyle: '지브리',
+  character: null,
+  charBasePrompt: '',
+  scenes: [],
+  images: null,
+  video: null,
+  clips: [],
+  sessionCost: 0,
+  sseLog: [],
+}
 
 const useProjectStore = create(
   persist(
@@ -12,8 +42,9 @@ const useProjectStore = create(
       clearApiKeys: () => set({ apiKeys: null }),
 
       // Project
-      projectId: generateId(),
-      resetProject: () => set({ projectId: generateId(), currentStep: 1, completedSteps: [], lyrics: null, story: null, music: null, images: null, video: null, clips: [], scenes: [], character: null, charBasePrompt: '' }),
+      projectId: generateProjectId(),
+      newProject: () => set({ projectId: generateProjectId(), ...EMPTY_PROJECT_STATE }),
+      resetProject: () => set({ projectId: generateProjectId(), ...EMPTY_PROJECT_STATE }),
 
       // Steps
       currentStep: 1,
@@ -25,10 +56,6 @@ const useProjectStore = create(
 
       // Lyrics (Step 1)
       lyrics: null,
-
-      // Story (Step 2)
-      story: null,
-      setStory: (data) => set({ story: data }),
       lyricsConfig: {
         genre: ['K-POP'],
         vocalist: { gender: '여성', age: '20대', style: '청아한' },
@@ -37,6 +64,10 @@ const useProjectStore = create(
       },
       setLyricsConfig: (cfg) => set((s) => ({ lyricsConfig: { ...s.lyricsConfig, ...cfg } })),
       setLyrics: (data) => set({ lyrics: data }),
+
+      // Story (Step 2)
+      story: null,
+      setStory: (data) => set({ story: data }),
 
       // Music (Step 2)
       music: null,

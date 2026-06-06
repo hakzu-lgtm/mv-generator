@@ -45,3 +45,13 @@ def get_temp_path() -> str:
     path = os.path.join(os.path.dirname(OUTPUT_BASE_PATH), "temp")
     os.makedirs(path, exist_ok=True)
     return path
+
+
+def project_path(pid: str, subdir: str = "", filename: str = "") -> str:
+    """output/{pid}/{subdir}/{filename} — 디렉토리 자동 생성."""
+    parts = [OUTPUT_BASE_PATH, pid]
+    if subdir:
+        parts.append(subdir)
+    dirpath = os.path.join(*parts)
+    os.makedirs(dirpath, exist_ok=True)
+    return os.path.join(dirpath, filename) if filename else dirpath

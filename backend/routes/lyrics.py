@@ -93,7 +93,7 @@ async def generate_lyrics(req: LyricsRequest):
             "theme":      req.theme,
         })
 
-        out_path = os.path.join(config.get_output_path("01_lyrics"), f"lyrics_{req.project_id}.json")
+        out_path = config.project_path(req.project_id, "01_lyrics", "lyrics.json")
         with open(out_path, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
 
@@ -110,7 +110,7 @@ async def regenerate_section(req: RegenerateSection):
     if not config.is_ready():
         raise HTTPException(status_code=400, detail="Project ID가 설정되지 않았습니다")
 
-    lyrics_path = os.path.join(config.get_output_path("01_lyrics"), f"lyrics_{req.project_id}.json")
+    lyrics_path = config.project_path(req.project_id, "01_lyrics", "lyrics.json")
     if not os.path.exists(lyrics_path):
         raise HTTPException(status_code=404, detail="프로젝트를 찾을 수 없습니다")
 
@@ -142,7 +142,7 @@ async def regenerate_section(req: RegenerateSection):
 
 @router.post("/confirm")
 async def confirm_lyrics(req: ConfirmRequest):
-    out_path = os.path.join(config.get_output_path("01_lyrics"), f"lyrics_{req.project_id}.json")
+    out_path = config.project_path(req.project_id, "01_lyrics", "lyrics.json")
     req.lyrics_data["confirmed"] = True
     with open(out_path, "w", encoding="utf-8") as f:
         json.dump(req.lyrics_data, f, ensure_ascii=False, indent=2)
@@ -151,7 +151,7 @@ async def confirm_lyrics(req: ConfirmRequest):
 
 @router.get("/{project_id}")
 async def get_lyrics(project_id: str):
-    lyrics_path = os.path.join(config.get_output_path("01_lyrics"), f"lyrics_{project_id}.json")
+    lyrics_path = config.project_path(project_id, "01_lyrics", "lyrics.json")
     if not os.path.exists(lyrics_path):
         raise HTTPException(status_code=404, detail="가사 파일을 찾을 수 없습니다")
     with open(lyrics_path, "r", encoding="utf-8") as f:

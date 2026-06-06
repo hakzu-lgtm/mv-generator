@@ -269,7 +269,7 @@ export default function Step3_Images() {
                 <div key={v.view} className="flex-1">
                   <div className="relative w-full aspect-square rounded-xl border border-border overflow-hidden bg-elevated">
                     <img
-                      src={`/api/images/file/${v.file}?t=${Date.now()}`}
+                      src={`/api/images/file/${v.file}?pid=${projectId}&t=${Date.now()}`}
                       alt={v.view}
                       className="w-full h-full object-cover"
                       onError={(e) => {

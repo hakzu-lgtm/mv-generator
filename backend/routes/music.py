@@ -57,7 +57,7 @@ async def sse_music_generate(pid: str, lyrics_data: dict):
     await asyncio.sleep(0.5)
 
     try:
-        import traceback
+        import traceback as _tb
         from services.lyria_service import generate_music as lyria_generate
 
         prompt = build_lyria_prompt(lyrics_data)
@@ -66,10 +66,17 @@ async def sse_music_generate(pid: str, lyrics_data: dict):
 
         yield f"data: {json.dumps({'type': 'progress', 'message': 'Lyria 3 Pro 음악 생성 중... (최대 10분)'})}\n\n"
 
-        wav_path = os.path.join(config.get_output_path("02_music"), f"music_{pid}.wav")
-        wav_path = await asyncio.to_thread(lyria_generate, prompt, wav_path)
+        wav_path = config.project_path(pid, "02_music", "music.wav")
+        wav_path, lyrics_text = await asyncio.to_thread(lyria_generate, prompt, wav_path)
 
-        mp3_path = wav_path.replace(".wav", ".mp3")
+        # actual_lyrics.txt 저장 (Lyria가 텍스트 출력을 포함한 경우)
+        if lyrics_text:
+            txt_path = config.project_path(pid, "02_music", "actual_lyrics.txt")
+            with open(txt_path, "w", encoding="utf-8") as f:
+                f.write(lyrics_text)
+            print(f"[MUSIC] actual_lyrics.txt saved ({len(lyrics_text)} chars)")
+
+        mp3_path = config.project_path(pid, "02_music", "music.mp3")
         from utils.audio import wav_to_mp3, analyze_bpm, get_audio_duration
         wav_to_mp3(wav_path, mp3_path)
         os.remove(wav_path)
@@ -81,13 +88,13 @@ async def sse_music_generate(pid: str, lyrics_data: dict):
 
         meta = {
             "project_id": pid,
-            "file": f"music_{pid}.mp3",
+            "file": "music.mp3",
             "duration": duration,
             "bpm": detected_bpm,
             "lyria_prompt": prompt,
             "cost": cost,
         }
-        meta_path = os.path.join(config.get_output_path("02_music"), f"music_{pid}_meta.json")
+        meta_path = config.project_path(pid, "02_music", "music_meta.json")
         with open(meta_path, "w", encoding="utf-8") as f:
             json.dump(meta, f, ensure_ascii=False, indent=2)
 
@@ -108,7 +115,7 @@ async def generate_music(req: MusicGenerateRequest):
     if not config.is_ready():
         raise HTTPException(status_code=400, detail="API 키가 설정되지 않았습니다")
 
-    lyrics_path = os.path.join(config.get_output_path("01_lyrics"), f"lyrics_{req.project_id}.json")
+    lyrics_path = config.project_path(req.project_id, "01_lyrics", "lyrics.json")
     if not os.path.exists(lyrics_path):
         raise HTTPException(status_code=404, detail="가사 파일을 찾을 수 없습니다")
 
@@ -126,17 +133,18 @@ async def generate_music(req: MusicGenerateRequest):
 async def upload_music(project_id: str, file: UploadFile = File(...)):
     content = await file.read()
     ext = os.path.splitext(file.filename)[1].lower() or ".mp3"
-    mp3_path = os.path.join(config.get_output_path("02_music"), f"music_{project_id}{ext}")
+    mp3_path = config.project_path(project_id, "02_music", f"music{ext}")
     with open(mp3_path, "wb") as f:
         f.write(content)
 
     duration = 0.0
+    bpm = 120.0
     try:
         from utils.audio import get_audio_duration, analyze_bpm
         duration = get_audio_duration(mp3_path)
         bpm = analyze_bpm(mp3_path)
     except Exception:
-        bpm = 120.0
+        pass
 
     meta = {
         "project_id": project_id,
@@ -146,7 +154,7 @@ async def upload_music(project_id: str, file: UploadFile = File(...)):
         "cost": 0,
         "uploaded": True,
     }
-    meta_path = os.path.join(config.get_output_path("02_music"), f"music_{project_id}_meta.json")
+    meta_path = config.project_path(project_id, "02_music", "music_meta.json")
     with open(meta_path, "w", encoding="utf-8") as f:
         json.dump(meta, f, ensure_ascii=False, indent=2)
 
@@ -156,7 +164,7 @@ async def upload_music(project_id: str, file: UploadFile = File(...)):
 @router.get("/file/{project_id}")
 async def get_music_file(project_id: str):
     for ext in [".mp3", ".wav", ".ogg"]:
-        path = os.path.join(config.get_output_path("02_music"), f"music_{project_id}{ext}")
+        path = config.project_path(project_id, "02_music", f"music{ext}")
         if os.path.exists(path):
             return FileResponse(path, media_type="audio/mpeg")
     raise HTTPException(status_code=404, detail="음악 파일을 찾을 수 없습니다")
@@ -164,7 +172,7 @@ async def get_music_file(project_id: str):
 
 @router.get("/meta/{project_id}")
 async def get_music_meta(project_id: str):
-    meta_path = os.path.join(config.get_output_path("02_music"), f"music_{project_id}_meta.json")
+    meta_path = config.project_path(project_id, "02_music", "music_meta.json")
     if not os.path.exists(meta_path):
         raise HTTPException(status_code=404, detail="메타데이터를 찾을 수 없습니다")
     with open(meta_path, "r", encoding="utf-8") as f:

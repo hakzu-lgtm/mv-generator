@@ -1,5 +1,5 @@
 import os
-from typing import List
+from typing import List, Optional
 
 
 def seconds_to_srt_time(seconds: float) -> str:
@@ -59,3 +59,35 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
     with open(output_path, "w", encoding="utf-8") as f:
         f.write(content)
     return output_path
+
+
+def _scale_lyrics(lyrics: list, music_duration: float) -> list:
+    expected_total = max((item.get("time_end", 0) for item in lyrics), default=0)
+    scale = music_duration / expected_total if expected_total > 0 else 1.0
+    return [
+        {
+            **item,
+            "time_start": item.get("time_start", 0) * scale,
+            "time_end":   item.get("time_end", item.get("time_start", 0) + 3) * scale,
+        }
+        for item in lyrics
+    ]
+
+
+def build_synced_srt(lyrics: list, music_duration: float, output_path: str) -> str:
+    """가사 타임스탬프를 실제 음악 길이에 맞게 스케일링해 SRT 생성."""
+    return generate_srt(_scale_lyrics(lyrics, music_duration) if lyrics else [], output_path)
+
+
+def build_synced_ass(
+    lyrics: list,
+    music_duration: float,
+    output_path: str,
+    chorus_color: bool = True,
+) -> str:
+    """가사 타임스탬프를 실제 음악 길이에 맞게 스케일링해 ASS 생성."""
+    return generate_ass(
+        _scale_lyrics(lyrics, music_duration) if lyrics else [],
+        output_path,
+        chorus_color,
+    )

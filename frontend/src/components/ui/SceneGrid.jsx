@@ -34,14 +34,14 @@ export default function SceneGrid({ scenes = [], projectId, onRegenerate, type =
             {scene.file ? (
               type === 'video' ? (
                 <video
-                  src={`http://localhost:8000/output/05_clips/${scene.file}`}
+                  src={`http://localhost:8000/output/${projectId}/05_clips/${scene.file}`}
                   className="w-full h-full object-cover"
                   controls
                   preload="metadata"
                 />
               ) : (
                 <img
-                  src={`/api/images/file/${scene.file}?t=${Date.now()}`}
+                  src={`/api/images/file/${scene.file}?pid=${projectId}&t=${Date.now()}`}
                   alt={`씬 ${i + 1}`}
                   className="w-full h-full object-cover"
                   onError={(e) => { e.target.style.display = 'none' }}

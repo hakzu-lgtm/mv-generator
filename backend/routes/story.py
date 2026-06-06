@@ -80,16 +80,12 @@ class StoryConfirmRequest(BaseModel):
     story_data: dict
 
 
-def _story_path(pid: str) -> str:
-    return os.path.join(config.get_output_path("01_lyrics"), f"story_{pid}.json")
-
-
 @router.post("/generate")
 async def generate_story(req: StoryRequest):
     if not config.is_ready():
         raise HTTPException(status_code=400, detail="Project ID가 설정되지 않았습니다")
 
-    lyrics_path = os.path.join(config.get_output_path("01_lyrics"), f"lyrics_{req.project_id}.json")
+    lyrics_path = config.project_path(req.project_id, "01_lyrics", "lyrics.json")
     if not os.path.exists(lyrics_path):
         raise HTTPException(status_code=404, detail="가사 파일을 찾을 수 없습니다. 1단계를 먼저 완료하세요.")
 
@@ -122,7 +118,8 @@ scene_plan은 가사의 각 섹션과 정확히 대응되어야 합니다."""
         story["lyrics_genre"] = lyrics_data.get("genre", [])
         story["lyrics_theme"] = theme
 
-        with open(_story_path(req.project_id), "w", encoding="utf-8") as f:
+        story_path = config.project_path(req.project_id, "01_lyrics", "story.json")
+        with open(story_path, "w", encoding="utf-8") as f:
             json.dump(story, f, ensure_ascii=False, indent=2)
 
         return story
@@ -141,14 +138,15 @@ async def regenerate_story(req: StoryRequest):
 @router.post("/confirm")
 async def confirm_story(req: StoryConfirmRequest):
     req.story_data["confirmed"] = True
-    with open(_story_path(req.project_id), "w", encoding="utf-8") as f:
+    story_path = config.project_path(req.project_id, "01_lyrics", "story.json")
+    with open(story_path, "w", encoding="utf-8") as f:
         json.dump(req.story_data, f, ensure_ascii=False, indent=2)
     return {"success": True}
 
 
 @router.get("/{project_id}")
 async def get_story(project_id: str):
-    path = _story_path(project_id)
+    path = config.project_path(project_id, "01_lyrics", "story.json")
     if not os.path.exists(path):
         raise HTTPException(status_code=404, detail="스토리가 없습니다")
     with open(path, "r", encoding="utf-8") as f:

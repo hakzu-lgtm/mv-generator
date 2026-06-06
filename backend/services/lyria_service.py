@@ -6,10 +6,13 @@ import os
 import config
 
 
-def generate_music(prompt: str, save_path: str) -> str:
+def generate_music(prompt: str, save_path: str) -> tuple:
+    """
+    Lyria 3 Pro로 음악을 생성한다.
+    반환: (wav_save_path, lyrics_text_or_None)
+    """
     project = config.get_project_id()
 
-    # Windows에서 gcloud.cmd 또는 gcloud 모두 시도
     gcloud_candidates = [
         "gcloud",
         "gcloud.cmd",
@@ -70,10 +73,12 @@ def generate_music(prompt: str, save_path: str) -> str:
     print(f"[LYRIA STATUS] {status}")
 
     audio_b64 = None
+    lyrics_text = None
     for out in data.get("outputs", []):
         if out.get("type") == "audio" and out.get("data"):
             audio_b64 = out["data"]
-            break
+        if out.get("type") == "text":
+            lyrics_text = out.get("text")
 
     if not audio_b64:
         print(f"[LYRIA RAW] {str(data)[:800]}")
@@ -90,4 +95,4 @@ def generate_music(prompt: str, save_path: str) -> str:
     with open(save_path, "wb") as f:
         f.write(audio_bytes)
     print(f"[LYRIA OK] {save_path} ({len(audio_bytes)} bytes)")
-    return save_path
+    return save_path, lyrics_text

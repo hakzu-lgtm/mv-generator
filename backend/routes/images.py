@@ -48,10 +48,9 @@ STYLE_KEYWORDS = {
     ),
 }
 
-# 레퍼런스 시트 전용 스타일 (올인원 시트 프롬프트 사용)
 SHEET_STYLES = {"한국웹툰시트", "시네마틱판타지"}
 
-IMAGE_COST = 0.101   # Nano Banana 2 2K 기준 단가
+IMAGE_COST = 0.101
 
 SAFETY_NOTE = (
     "tasteful artistic depiction, safe for all audiences, "
@@ -81,9 +80,8 @@ def build_scene_prompt(scene: dict, char_base: str, style_kw: str, style_key: st
 
 
 def _char_front_path(project_id: str) -> Optional[str]:
-    """주인공 에셋 시트 경로 반환 — protagonist 우선, 없으면 char_front."""
-    chars_dir = config.get_output_path("03_characters")
-    for name in [f"protagonist_{project_id}.png", f"char_front_{project_id}.png"]:
+    chars_dir = config.project_path(project_id, "03_characters")
+    for name in ["protagonist.png", "char_front.png"]:
         p = os.path.join(chars_dir, name)
         if os.path.exists(p) and os.path.getsize(p) > 100:
             return p
@@ -91,25 +89,22 @@ def _char_front_path(project_id: str) -> Optional[str]:
 
 
 def _supporting_path(project_id: str) -> Optional[str]:
-    p = os.path.join(config.get_output_path("03_characters"), f"supporting_{project_id}.png")
+    p = config.project_path(project_id, "03_characters", "supporting.png")
     return p if os.path.exists(p) and os.path.getsize(p) > 100 else None
 
 
 def _assets_path(project_id: str) -> Optional[str]:
-    p = os.path.join(config.get_output_path("03_characters"), f"assets_{project_id}.png")
+    p = config.project_path(project_id, "03_characters", "assets.png")
     return p if os.path.exists(p) and os.path.getsize(p) > 100 else None
 
 
 def _create_char_placeholder(path: str, view: str):
-    """캐릭터 시트 플레이스홀더 — 밝은 배경의 인물 실루엣."""
     try:
         from PIL import Image, ImageDraw
         img  = Image.new("RGB", (1024, 1024), color=(232, 236, 248))
         draw = ImageDraw.Draw(img)
         draw.rectangle([10, 10, 1013, 1013], outline=(80, 120, 200), width=6)
-        # 머리
         draw.ellipse([362, 150, 662, 450], fill=(180, 190, 215), outline=(80, 120, 200), width=3)
-        # 몸통
         draw.rectangle([310, 480, 714, 860], fill=(180, 190, 215), outline=(80, 120, 200), width=3)
         draw.text((512, 930), f"캐릭터 시트 ({view.upper()})", fill=(50, 70, 140), anchor="mm")
         draw.text((512, 975), "Nano Banana 2 생성 대기중", fill=(120, 140, 190), anchor="mm")
@@ -125,13 +120,13 @@ def _create_char_placeholder(path: str, view: str):
 def _create_placeholder(path: str, idx: int, section: str, is_chorus: bool):
     try:
         from PIL import Image, ImageDraw
-        bg      = (255, 248, 220) if is_chorus else (230, 235, 245)   # 밝은 배경
-        border  = (245, 158, 11)  if is_chorus else (80, 120, 200)    # 테두리
-        fg      = (160, 100, 0)   if is_chorus else (50, 70, 130)     # 텍스트
-        img     = Image.new("RGB", (1920, 1080), color=bg)
-        draw    = ImageDraw.Draw(img)
+        bg     = (255, 248, 220) if is_chorus else (230, 235, 245)
+        border = (245, 158, 11)  if is_chorus else (80, 120, 200)
+        fg     = (160, 100, 0)   if is_chorus else (50, 70, 130)
+        img    = Image.new("RGB", (1920, 1080), color=bg)
+        draw   = ImageDraw.Draw(img)
         draw.rectangle([12, 12, 1907, 1067], outline=border, width=10)
-        label   = f"{'★ CHORUS — ' if is_chorus else ''}씬 {idx+1}: {section}"
+        label  = f"{'CHORUS -- ' if is_chorus else ''}씬 {idx+1}: {section}"
         draw.text((960, 520), label, fill=fg, anchor="mm")
         draw.text((960, 580), "(이미지 생성 대기중)", fill=border, anchor="mm")
         img.save(path)
@@ -142,8 +137,6 @@ def _create_placeholder(path: str, idx: int, section: str, is_chorus: bool):
         except Exception:
             pass
 
-
-# ── SSE 자동 생성 ─────────────────────────────────────────────────
 
 def _model_label(model_id: str) -> str:
     if not model_id or model_id == "placeholder":
@@ -168,7 +161,6 @@ async def sse_images_generate(pid: str, scenes: list, style: str, char_base: str
     fail_n        = 0
 
     for i, scene in enumerate(scenes):
-        # 씬에 등장하는 캐릭터에 따라 참조 이미지 선택
         refs = []
         scene_chars = scene.get("characters", [])
         if "protagonist" in scene_chars or not scene_chars:
@@ -180,11 +172,10 @@ async def sse_images_generate(pid: str, scenes: list, style: str, char_base: str
             refs.append(assets_sheet)
 
         prompt   = build_scene_prompt(scene, char_base, style_kw, style)
-        img_path = os.path.join(config.get_output_path("04_images"), f"scene_{i:03d}_{pid}.png")
+        img_path = config.project_path(pid, "04_images", f"scene_{i:03d}.png")
 
         yield f"data: {json.dumps({'type': 'progress', 'scene': i, 'total': len(scenes), 'message': f'씬 {i+1}/{len(scenes)} 생성 중...'})}\n\n"
 
-        # 재시도 콜백 — SSE로 상태 전달용 큐
         retry_msgs = []
         def on_retry(attempt, total, wait_sec, _msgs=retry_msgs):
             _msgs.append(f"재시도 {attempt}/{total} ({wait_sec}초 대기중...)")
@@ -204,15 +195,14 @@ async def sse_images_generate(pid: str, scenes: list, style: str, char_base: str
             actual_cost = MODEL_COST.get(used_model, max_unit_cost)
             cost_guard.record(pid, f"image_{used_model}", actual_cost)
             success_n += 1
-            yield f"data: {json.dumps({'type': 'scene_done', 'scene': i, 'success': True, 'model': _model_label(used_model), 'message': f'✓ 씬 {i+1} 완료 ({_model_label(used_model)})'})}\n\n"
+            yield f"data: {json.dumps({'type': 'scene_done', 'scene': i, 'success': True, 'model': _model_label(used_model), 'message': f'[OK] 씬 {i+1} 완료 ({_model_label(used_model)})'})}\n\n"
 
         except Exception as e:
             for msg in retry_msgs:
                 yield f"data: {json.dumps({'type': 'progress', 'message': msg})}\n\n"
             fail_n += 1
-            # 실제 에러 메시지를 UI 로그에 노출
             err_detail = str(e)[:200]
-            yield f"data: {json.dumps({'type': 'scene_done', 'scene': i, 'success': False, 'message': f'✗ 씬 {i+1} 실패: {err_detail}'})}\n\n"
+            yield f"data: {json.dumps({'type': 'scene_done', 'scene': i, 'success': False, 'message': f'[FAIL] 씬 {i+1} 실패: {err_detail}'})}\n\n"
             _create_placeholder(img_path, i, scene.get("section", ""), scene.get("is_chorus", False))
 
         results.append({
@@ -226,7 +216,6 @@ async def sse_images_generate(pid: str, scenes: list, style: str, char_base: str
             "failed":    used_model is None,
         })
 
-        # 씬 간 딜레이 (마지막 씬 제외)
         if i < len(scenes) - 1:
             yield f"data: {json.dumps({'type': 'progress', 'message': f'{SCENE_DELAY_SEC}초 대기 중 (속도 제한 예방)...'})}\n\n"
             await asyncio.sleep(SCENE_DELAY_SEC)
@@ -234,8 +223,6 @@ async def sse_images_generate(pid: str, scenes: list, style: str, char_base: str
     summary = f"완료: 성공 {success_n}개 / 실패 {fail_n}개"
     yield f"data: {json.dumps({'type': 'complete', 'results': results, 'success': success_n, 'failed': fail_n, 'summary': summary, 'total_cost': cost_guard.get_total(pid)})}\n\n"
 
-
-# ── Request Models ────────────────────────────────────────────────
 
 class PrepareRequest(BaseModel):
     project_id: str
@@ -259,10 +246,7 @@ class AssetSheetRequest(BaseModel):
     style: str
 
 
-# ── Routes ───────────────────────────────────────────────────────
-
 def _default_scenes(style_kw: str) -> list:
-    """Vertex AI 없이도 쓸 수 있는 기본 씬 10개."""
     sections = [
         ("인트로", False, "wide establishing shot of a scenic landscape at golden hour"),
         ("벌스1", False, "medium shot of the main character walking through a city street"),
@@ -281,7 +265,7 @@ def _default_scenes(style_kw: str) -> list:
             "section": sec,
             "is_chorus": is_c,
             "description": f"{desc}, {style_kw}",
-            "camera": cam_part if (cam_part := desc.split(",")[0]) else "medium shot",
+            "camera": desc.split(",")[0],
             "lyrics_ref": "",
         }
         for i, (sec, is_c, desc) in enumerate(sections)
@@ -293,12 +277,11 @@ async def prepare_scenes(req: PrepareRequest):
     if not config.is_ready():
         raise HTTPException(status_code=400, detail="Project ID가 설정되지 않았습니다")
 
-    style_kw   = STYLE_KEYWORDS.get(req.style, req.style)
-    pid        = req.project_id
-    story_path = os.path.join(config.get_output_path("01_lyrics"), f"story_{pid}.json")
-    lyrics_path = os.path.join(config.get_output_path("01_lyrics"), f"lyrics_{pid}.json")
+    style_kw    = STYLE_KEYWORDS.get(req.style, req.style)
+    pid         = req.project_id
+    story_path  = config.project_path(pid, "01_lyrics", "story.json")
+    lyrics_path = config.project_path(pid, "01_lyrics", "lyrics.json")
 
-    # 스토리가 있으면 scene_plan 사용 (가장 우선)
     if os.path.exists(story_path):
         with open(story_path, "r", encoding="utf-8") as f:
             story = json.load(f)
@@ -306,7 +289,6 @@ async def prepare_scenes(req: PrepareRequest):
         scene_plan  = story.get("scene_plan", [])
         hook_motif  = story.get("hook_motif", "")
         settings    = {s["id"]: s for s in story.get("settings", [])}
-        protagonist = story.get("characters", {}).get("protagonist", {})
 
         scenes = []
         for sp in scene_plan:
@@ -340,7 +322,6 @@ async def prepare_scenes(req: PrepareRequest):
             })
 
     elif os.path.exists(lyrics_path):
-        # 스토리 없음 → 가사로 씬 분할
         with open(lyrics_path, "r", encoding="utf-8") as f:
             lyrics_data = json.load(f)
         lyrics_text = "\n".join([f"[{l['section']}] {l['text']}" for l in lyrics_data.get("lyrics", [])])
@@ -377,7 +358,7 @@ JSON 배열로 반환:
     else:
         scenes = _default_scenes(style_kw)
 
-    scenes_path = os.path.join(config.get_output_path("04_images"), f"scenes_{req.project_id}.json")
+    scenes_path = config.project_path(req.project_id, "04_images", "scenes.json")
     with open(scenes_path, "w", encoding="utf-8") as f:
         json.dump({"scenes": scenes, "style": req.style}, f, ensure_ascii=False, indent=2)
 
@@ -403,10 +384,11 @@ async def generate_character_sheet(req: CharacterSheetRequest):
         f"{char.get('feature', '')}, {char.get('mood', 'cheerful')}"
     )
 
-    chars_dir = config.get_output_path("03_characters")
-    pid       = req.project_id
+    pid        = req.project_id
+    front_path = config.project_path(pid, "03_characters", "char_front.png")
+    side_path  = config.project_path(pid, "03_characters", "char_side.png")
+    back_path  = config.project_path(pid, "03_characters", "char_back.png")
 
-    # 뷰별 프롬프트 정의
     front_prompt = (
         f"Full body character design, {style_kw} style, {base_desc}, "
         f"FRONT view, facing forward directly, standing pose, "
@@ -414,27 +396,22 @@ async def generate_character_sheet(req: CharacterSheetRequest):
         f"clean lines, character reference sheet style"
     )
     side_prompt = (
-        f"The EXACT SAME character as the reference image — "
+        f"The EXACT SAME character as the reference image -- "
         f"same face, hairstyle, clothing colors and design. "
         f"Now show in SIDE PROFILE view, 90 degrees to the right, "
         f"full body, white background, {style_kw} style. "
         f"Keep the character design 100% identical to the reference."
     )
     back_prompt = (
-        f"The EXACT SAME character as the reference image — "
+        f"The EXACT SAME character as the reference image -- "
         f"same hairstyle, clothing colors and design. "
         f"Now show from BEHIND (back view), full body, "
         f"white background, {style_kw} style. "
         f"Keep the character design 100% identical to the reference."
     )
 
-    front_path = os.path.join(chars_dir, f"char_front_{pid}.png")
-    side_path  = os.path.join(chars_dir, f"char_side_{pid}.png")
-    back_path  = os.path.join(chars_dir, f"char_back_{pid}.png")
-
     results = []
 
-    # ── 1. Front 먼저 (참조 없음) ────────────────────────────────
     used_model = None
     try:
         result     = await asyncio.to_thread(nb2_generate, front_prompt, front_path, None)
@@ -449,7 +426,6 @@ async def generate_character_sheet(req: CharacterSheetRequest):
 
     await asyncio.sleep(3)
 
-    # ── 2. Side — Front를 참조로 ─────────────────────────────────
     front_ref = [front_path] if os.path.exists(front_path) and os.path.getsize(front_path) > 100 else None
     used_model = None
     try:
@@ -465,7 +441,6 @@ async def generate_character_sheet(req: CharacterSheetRequest):
 
     await asyncio.sleep(3)
 
-    # ── 3. Back — Front를 참조로 ─────────────────────────────────
     used_model = None
     try:
         result     = await asyncio.to_thread(nb2_generate, back_prompt, back_path, front_ref)
@@ -479,14 +454,14 @@ async def generate_character_sheet(req: CharacterSheetRequest):
                     "prompt": back_prompt, "model": used_model or "placeholder"})
 
     char_meta = {
-        "project_id":   req.project_id,
-        "character":    char,
-        "base_prompt":  base_desc,
-        "style":        req.style,
+        "project_id":     req.project_id,
+        "character":      char,
+        "base_prompt":    base_desc,
+        "style":          req.style,
         "style_keywords": style_kw,
-        "views":        results,
+        "views":          results,
     }
-    meta_path = os.path.join(config.get_output_path("03_characters"), f"char_meta_{req.project_id}.json")
+    meta_path = config.project_path(pid, "03_characters", "char_meta.json")
     with open(meta_path, "w", encoding="utf-8") as f:
         json.dump(char_meta, f, ensure_ascii=False, indent=2)
 
@@ -502,9 +477,9 @@ async def generate_character_sheet(req: CharacterSheetRequest):
 async def generate_asset_sheets(req: AssetSheetRequest):
     """
     스토리 기반 에셋 시트 3종 생성:
-    1) protagonist_{pid}.png — 주인공 (다양한 표정)
-    2) supporting_{pid}.png  — 조연 (주인공 참조)
-    3) assets_{pid}.png      — 배경+아이템 4K
+    1) protagonist.png  — 주인공 (다양한 표정)
+    2) supporting.png   — 조연 (주인공 참조)
+    3) assets.png       — 배경+아이템 4K
     """
     import traceback as _tb
 
@@ -515,12 +490,10 @@ async def generate_asset_sheets(req: AssetSheetRequest):
     try:
         pid        = req.project_id
         style_kw   = STYLE_KEYWORDS.get(req.style, STYLE_KEYWORDS.get("2D일러스트", req.style))
-        story_path = os.path.join(config.get_output_path("01_lyrics"), f"story_{pid}.json")
-        chars_dir  = config.get_output_path("03_characters")
+        story_path = config.project_path(pid, "01_lyrics", "story.json")
 
         print(f"[asset-sheet] 시작: project={pid} style={req.style!r} style_kw={style_kw[:60]!r}")
 
-        # ── 스토리에서 캐릭터/배경 정보 안전 로드 ───────────────────
         story = {}
         try:
             if os.path.exists(story_path):
@@ -575,7 +548,6 @@ async def generate_asset_sheets(req: AssetSheetRequest):
         all_errors = []
 
         def _run_sheet(label: str, path: str, prompt: str, refs=None, resolution="2K"):
-            """에셋 시트 하나를 생성. 실패 시 플레이스홀더 + 에러 기록."""
             model_used = None
             err_msg    = None
             print(f"[asset-sheet] {label} 생성 시작 (resolution={resolution})")
@@ -594,9 +566,7 @@ async def generate_asset_sheets(req: AssetSheetRequest):
             return model_used, err_msg
 
         prot_name = (protagonist.get("name") or "protagonist").strip()
-
-        # ── 1. 주인공 전문 레퍼런스 시트 (4K, 스타일별 분기) ────────
-        prot_path = os.path.join(chars_dir, f"protagonist_{pid}.png")
+        prot_path = config.project_path(pid, "03_characters", "protagonist.png")
 
         if req.style == "시네마틱판타지":
             prot_prompt = (
@@ -606,7 +576,7 @@ async def generate_asset_sheets(req: AssetSheetRequest):
                 f"Character: {prot_name}, {prot_desc}{BEAUTY_BOOST}. "
                 f"The sheet MUST include, neatly arranged in panels: "
                 f"1. Large full-body key visual on the left, dramatic pose. "
-                f"2. EXPRESSIONS: 6 expressions — neutral, surprised, tense, determined, soft smile, slightly tired. "
+                f"2. EXPRESSIONS: 6 expressions -- neutral, surprised, tense, determined, soft smile, slightly tired. "
                 f"3. FULL BODY: front, side, back, 3/4 view. "
                 f"4. KEY POSES: 4 atmospheric scene poses. "
                 f"5. OUTFIT variations: casual to heroine styles. "
@@ -621,7 +591,7 @@ async def generate_asset_sheets(req: AssetSheetRequest):
                 f"Character: {prot_name}, {prot_desc}. "
                 f"The sheet MUST include, neatly arranged in panels: "
                 f"1. Large key visual portrait on the left (bust shot). "
-                f"2. EXPRESSIONS row: 6 facial expressions — neutral, soft smile, surprised, wonder, determined, moved. "
+                f"2. EXPRESSIONS row: 6 facial expressions -- neutral, soft smile, surprised, wonder, determined, moved. "
                 f"3. FULL BODY row: front view, side view, back view. "
                 f"4. POSES row: walking, running, startled, gazing, laughing. "
                 f"5. OUTFIT detail callouts. "
@@ -638,8 +608,7 @@ async def generate_asset_sheets(req: AssetSheetRequest):
         })
         await asyncio.sleep(3)
 
-        # ── 2. 조연 시트 (주인공 참조, 간소화) ──────────────────────
-        supp_path  = os.path.join(chars_dir, f"supporting_{pid}.png")
+        supp_path  = config.project_path(pid, "03_characters", "supporting.png")
         prot_ref   = [prot_path] if os.path.exists(prot_path) and os.path.getsize(prot_path) > 100 else None
         supp_name  = (supporting.get("name") or "supporting character").strip()
         beauty_sfx = BEAUTY_BOOST if req.style == "시네마틱판타지" else ""
@@ -649,7 +618,7 @@ async def generate_asset_sheets(req: AssetSheetRequest):
             f"Character: {supp_name}, {supp_desc}{beauty_sfx}. "
             f"The sheet includes: "
             f"1. Bust portrait (key visual). "
-            f"2. EXPRESSIONS row: 3 expressions — neutral, happy, sad. "
+            f"2. EXPRESSIONS row: 3 expressions -- neutral, happy, sad. "
             f"3. FULL BODY: front view and side view. "
             f"4. POSES: 2 characteristic poses. "
             f"CRITICAL: identical face, hairstyle, and outfit across ALL panels. "
@@ -664,12 +633,11 @@ async def generate_asset_sheets(req: AssetSheetRequest):
         })
         await asyncio.sleep(3)
 
-        # ── 3. 배경+소품 무드보드 시트 (4K) ─────────────────────────
-        assets_file   = os.path.join(chars_dir, f"assets_{pid}.png")
+        assets_file   = config.project_path(pid, "03_characters", "assets.png")
         assets_prompt = (
             f"Production asset sheet / mood board, {style_kw} style, single image, labeled grid layout. "
-            f"BACKGROUNDS section — 3 environments:\n{_safe_settings_str()}\n"
-            f"PROPS section — key story items: {_safe_items_str()}\n"
+            f"BACKGROUNDS section -- 3 environments:\n{_safe_settings_str()}\n"
+            f"PROPS section -- key story items: {_safe_items_str()}\n"
             f"Clean reference-sheet layout, consistent art style, white background, 4K."
         )
         used_model, err = await asyncio.to_thread(_run_sheet, "assets", assets_file, assets_prompt, None, "4K")
@@ -682,7 +650,8 @@ async def generate_asset_sheets(req: AssetSheetRequest):
 
         meta = {"project_id": pid, "style": req.style, "sheets": results, "errors": all_errors}
         try:
-            with open(os.path.join(chars_dir, f"asset_meta_{pid}.json"), "w", encoding="utf-8") as f:
+            meta_path = config.project_path(pid, "03_characters", "asset_meta.json")
+            with open(meta_path, "w", encoding="utf-8") as f:
                 json.dump(meta, f, ensure_ascii=False, indent=2)
         except Exception:
             pass
@@ -710,7 +679,7 @@ async def generate_auto(req: AutoGenerateRequest):
     if not config.is_ready():
         raise HTTPException(status_code=400, detail="API 키가 설정되지 않았습니다")
 
-    scenes_path = os.path.join(config.get_output_path("04_images"), f"scenes_{req.project_id}.json")
+    scenes_path = config.project_path(req.project_id, "04_images", "scenes.json")
     if not os.path.exists(scenes_path):
         raise HTTPException(status_code=404, detail="씬 데이터를 찾을 수 없습니다")
 
@@ -727,7 +696,7 @@ async def generate_auto(req: AutoGenerateRequest):
 @router.post("/upload/{scene_id}")
 async def upload_image(scene_id: int, project_id: str, file: UploadFile = File(...)):
     content  = await file.read()
-    img_path = os.path.join(config.get_output_path("04_images"), f"scene_{scene_id:03d}_{project_id}.png")
+    img_path = config.project_path(project_id, "04_images", f"scene_{scene_id:03d}.png")
 
     try:
         from PIL import Image
@@ -746,27 +715,24 @@ class RegenerateFailedRequest(BaseModel):
     project_id: str
     style: str
     char_base_prompt: str
-    failed_scene_ids: list  # 프론트에서 전달한 실패 씬 ID 목록
+    failed_scene_ids: list
 
 
 @router.post("/regenerate-failed")
 async def regenerate_failed(req: RegenerateFailedRequest):
-    """플레이스홀더(실패) 씬만 골라 재생성."""
     if not config.is_ready():
         raise HTTPException(status_code=400, detail="Project ID가 설정되지 않았습니다")
 
-    scenes_path = os.path.join(config.get_output_path("04_images"), f"scenes_{req.project_id}.json")
+    scenes_path = config.project_path(req.project_id, "04_images", "scenes.json")
     if not os.path.exists(scenes_path):
         raise HTTPException(status_code=404, detail="씬 데이터 없음")
 
     with open(scenes_path, "r", encoding="utf-8") as f:
         scenes_data = json.load(f)
 
-    failed_ids = set(req.failed_scene_ids)
-    target_scenes = [s for s in scenes_data["scenes"] if s.get("scene_id", s.get("scene_id", 0)) in failed_ids]
-
+    failed_ids    = set(req.failed_scene_ids)
+    target_scenes = [s for s in scenes_data["scenes"] if s.get("scene_id", 0) in failed_ids]
     if not target_scenes:
-        # scene_id 필드 없으면 인덱스로 필터
         target_scenes = [s for i, s in enumerate(scenes_data["scenes"]) if i in failed_ids]
 
     async def _sse():
@@ -780,7 +746,7 @@ async def regenerate_failed(req: RegenerateFailedRequest):
         for idx, scene in enumerate(target_scenes):
             scene_idx = scene.get("scene_id", idx)
             prompt    = build_scene_prompt(scene, req.char_base_prompt, style_kw, req.style)
-            img_path  = os.path.join(config.get_output_path("04_images"), f"scene_{scene_idx:03d}_{req.project_id}.png")
+            img_path  = config.project_path(req.project_id, "04_images", f"scene_{scene_idx:03d}.png")
 
             yield f"data: {json.dumps({'type': 'progress', 'scene': idx, 'total': len(target_scenes), 'message': f'씬 {scene_idx+1} 재생성 중...'})}\n\n"
 
@@ -801,11 +767,11 @@ async def regenerate_failed(req: RegenerateFailedRequest):
                 actual_cost = MODEL_COST.get(used_model, max(MODEL_COST.values()))
                 cost_guard.record(req.project_id, f"image_{used_model}", actual_cost)
                 success_n += 1
-                yield f"data: {json.dumps({'type': 'scene_done', 'scene': scene_idx, 'success': True, 'message': f'✓ 씬 {scene_idx+1} 완료 ({_model_label(used_model)})'})}\n\n"
+                yield f"data: {json.dumps({'type': 'scene_done', 'scene': scene_idx, 'success': True, 'message': f'[OK] 씬 {scene_idx+1} 완료 ({_model_label(used_model)})'})}\n\n"
             except Exception as e:
                 for msg in retry_msgs:
                     yield f"data: {json.dumps({'type': 'progress', 'message': msg})}\n\n"
-                yield f"data: {json.dumps({'type': 'scene_done', 'scene': scene_idx, 'success': False, 'message': f'✗ 씬 {scene_idx+1} 재시도 실패'})}\n\n"
+                yield f"data: {json.dumps({'type': 'scene_done', 'scene': scene_idx, 'success': False, 'message': f'[FAIL] 씬 {scene_idx+1} 재시도 실패'})}\n\n"
                 _create_placeholder(img_path, scene_idx, scene.get("section", ""), scene.get("is_chorus", False))
 
             results.append({
@@ -826,7 +792,7 @@ async def regenerate_failed(req: RegenerateFailedRequest):
 
 @router.get("/prompts/{project_id}")
 async def get_prompts(project_id: str):
-    scenes_path = os.path.join(config.get_output_path("04_images"), f"scenes_{project_id}.json")
+    scenes_path = config.project_path(project_id, "04_images", "scenes.json")
     if not os.path.exists(scenes_path):
         raise HTTPException(status_code=404, detail="씬 데이터를 찾을 수 없습니다")
     with open(scenes_path, "r", encoding="utf-8") as f:
@@ -834,9 +800,25 @@ async def get_prompts(project_id: str):
 
 
 @router.get("/file/{filename}")
-async def get_image_file(filename: str):
-    for subdir in ["04_images", "03_characters"]:
-        path = os.path.join(config.get_output_path(subdir), filename)
-        if os.path.exists(path) and os.path.getsize(path) > 0:
-            return FileResponse(path, media_type="image/png")
+async def get_image_file(filename: str, pid: str = ""):
+    if pid:
+        for subdir in ["04_images", "03_characters"]:
+            path = config.project_path(pid, subdir, filename)
+            if os.path.exists(path) and os.path.getsize(path) > 0:
+                return FileResponse(path, media_type="image/png")
+    # pid 없으면 모든 프로젝트 폴더에서 탐색 (최신 순)
+    base = os.path.abspath(config.OUTPUT_BASE_PATH)
+    if os.path.exists(base):
+        try:
+            proj_dirs = sorted(
+                [d for d in os.listdir(base) if os.path.isdir(os.path.join(base, d))],
+                reverse=True,
+            )
+        except Exception:
+            proj_dirs = []
+        for proj_dir in proj_dirs:
+            for subdir in ["04_images", "03_characters"]:
+                path = os.path.join(base, proj_dir, subdir, filename)
+                if os.path.exists(path) and os.path.getsize(path) > 0:
+                    return FileResponse(path, media_type="image/png")
     raise HTTPException(status_code=404, detail="이미지를 찾을 수 없습니다")
