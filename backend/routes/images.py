@@ -12,6 +12,13 @@ from services.image_service import (
     MODEL_COST, SCENE_DELAY_SEC,
 )
 from services.gemini_service import generate_text, parse_json_response
+from utils.prompt_builder import (
+    build_character_sheet_prompt,
+    build_character_front_prompt,
+    build_supporting_sheet_prompt,
+    build_assets_sheet_prompt,
+    build_scene_prompt_rich,
+)
 
 router = APIRouter(prefix="/api/images", tags=["images"])
 
@@ -48,35 +55,11 @@ STYLE_KEYWORDS = {
     ),
 }
 
-SHEET_STYLES = {"한국웹툰시트", "시네마틱판타지"}
-
 IMAGE_COST = 0.101
-
-SAFETY_NOTE = (
-    "tasteful artistic depiction, safe for all audiences, "
-    "non-violent, poetic and metaphorical expression"
-)
-
-BEAUTY_BOOST = (
-    ", beautiful detailed face, attractive features, "
-    "flawless skin, expressive captivating eyes, "
-    "professional character art, masterpiece quality, "
-    "perfect facial proportions, elegant"
-)
 
 
 def build_scene_prompt(scene: dict, char_base: str, style_kw: str, style_key: str = "") -> str:
-    desc      = scene.get("description", "")
-    camera    = scene.get("camera", "medium shot")
-    is_chorus = scene.get("is_chorus", False)
-    mood      = scene.get("mood", "")
-    energy    = "dynamic visual composition, cinematic lighting" if is_chorus else "balanced composition, peaceful mood"
-    mood_note = f"Scene mood: {mood}." if mood else ""
-    beauty    = BEAUTY_BOOST if style_key in SHEET_STYLES else ""
-    return (
-        f"{char_base}, {desc}, {camera}, {style_kw}{beauty}, "
-        f"{energy}, {SAFETY_NOTE}, 16:9 aspect ratio, high quality. {mood_note}"
-    )
+    return build_scene_prompt_rich(scene, char_base, style_key or style_kw, style_kw)
 
 
 def _char_front_path(project_id: str) -> Optional[str]:
@@ -389,11 +372,8 @@ async def generate_character_sheet(req: CharacterSheetRequest):
     side_path  = config.project_path(pid, "03_characters", "char_side.png")
     back_path  = config.project_path(pid, "03_characters", "char_back.png")
 
-    front_prompt = (
-        f"Full body character design, {style_kw} style, {base_desc}, "
-        f"FRONT view, facing forward directly, standing pose, "
-        f"white background, full body visible from head to toe, "
-        f"clean lines, character reference sheet style"
+    front_prompt = build_character_front_prompt(
+        req.style, char.get("name", "protagonist"), base_desc
     )
     side_prompt = (
         f"The EXACT SAME character as the reference image -- "
@@ -568,37 +548,7 @@ async def generate_asset_sheets(req: AssetSheetRequest):
         prot_name = (protagonist.get("name") or "protagonist").strip()
         prot_path = config.project_path(pid, "03_characters", "protagonist.png")
 
-        if req.style == "시네마틱판타지":
-            prot_prompt = (
-                f"Professional character reference sheet, single image, "
-                f"cinematic semi-realistic fantasy art style, "
-                f"dramatic film-quality lighting, dark moody atmosphere with golden accents, bokeh background. "
-                f"Character: {prot_name}, {prot_desc}{BEAUTY_BOOST}. "
-                f"The sheet MUST include, neatly arranged in panels: "
-                f"1. Large full-body key visual on the left, dramatic pose. "
-                f"2. EXPRESSIONS: 6 expressions -- neutral, surprised, tense, determined, soft smile, slightly tired. "
-                f"3. FULL BODY: front, side, back, 3/4 view. "
-                f"4. KEY POSES: 4 atmospheric scene poses. "
-                f"5. OUTFIT variations: casual to heroine styles. "
-                f"6. Hair style variations and color palette swatches. "
-                f"CRITICAL: identical beautiful face, hairstyle across ALL panels. "
-                f"Cinematic lighting throughout. Ultra detailed, 4K."
-            )
-        else:
-            prot_prompt = (
-                f"Professional character reference sheet, single image, "
-                f"{style_kw}, soft cel shading, clean layout with labeled sections, pastel background. "
-                f"Character: {prot_name}, {prot_desc}. "
-                f"The sheet MUST include, neatly arranged in panels: "
-                f"1. Large key visual portrait on the left (bust shot). "
-                f"2. EXPRESSIONS row: 6 facial expressions -- neutral, soft smile, surprised, wonder, determined, moved. "
-                f"3. FULL BODY row: front view, side view, back view. "
-                f"4. POSES row: walking, running, startled, gazing, laughing. "
-                f"5. OUTFIT detail callouts. "
-                f"6. Small color palette swatches at the bottom. "
-                f"CRITICAL: identical face, hairstyle, and outfit across ALL panels. "
-                f"Clean reference-sheet composition, white/pastel background, labeled panels. High detail, 4K."
-            )
+        prot_prompt = build_character_sheet_prompt(req.style, prot_name, prot_desc)
         used_model, err = await asyncio.to_thread(_run_sheet, "protagonist", prot_path, prot_prompt, None, "4K")
         results.append({
             "type": "protagonist", "label": "주인공 레퍼런스 시트 (4K)",
@@ -611,19 +561,7 @@ async def generate_asset_sheets(req: AssetSheetRequest):
         supp_path  = config.project_path(pid, "03_characters", "supporting.png")
         prot_ref   = [prot_path] if os.path.exists(prot_path) and os.path.getsize(prot_path) > 100 else None
         supp_name  = (supporting.get("name") or "supporting character").strip()
-        beauty_sfx = BEAUTY_BOOST if req.style == "시네마틱판타지" else ""
-        supp_prompt = (
-            f"Professional character reference sheet, single image, "
-            f"{style_kw}, SAME art style as the reference image. "
-            f"Character: {supp_name}, {supp_desc}{beauty_sfx}. "
-            f"The sheet includes: "
-            f"1. Bust portrait (key visual). "
-            f"2. EXPRESSIONS row: 3 expressions -- neutral, happy, sad. "
-            f"3. FULL BODY: front view and side view. "
-            f"4. POSES: 2 characteristic poses. "
-            f"CRITICAL: identical face, hairstyle, and outfit across ALL panels. "
-            f"White/pastel background, labeled panels, {style_kw} style."
-        )
+        supp_prompt = build_supporting_sheet_prompt(req.style, supp_name, supp_desc)
         used_model, err = await asyncio.to_thread(_run_sheet, "supporting", supp_path, supp_prompt, prot_ref)
         results.append({
             "type": "supporting", "label": "조연 레퍼런스 시트",
@@ -634,12 +572,7 @@ async def generate_asset_sheets(req: AssetSheetRequest):
         await asyncio.sleep(3)
 
         assets_file   = config.project_path(pid, "03_characters", "assets.png")
-        assets_prompt = (
-            f"Production asset sheet / mood board, {style_kw} style, single image, labeled grid layout. "
-            f"BACKGROUNDS section -- 3 environments:\n{_safe_settings_str()}\n"
-            f"PROPS section -- key story items: {_safe_items_str()}\n"
-            f"Clean reference-sheet layout, consistent art style, white background, 4K."
-        )
+        assets_prompt = build_assets_sheet_prompt(req.style, _safe_settings_str(), _safe_items_str())
         used_model, err = await asyncio.to_thread(_run_sheet, "assets", assets_file, assets_prompt, None, "4K")
         results.append({
             "type": "assets", "label": "배경 & 소품 무드보드 (4K)",
