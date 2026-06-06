@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { motion } from 'framer-motion'
-import { CheckCircle, AlertCircle, Loader, ExternalLink, ChevronRight, Info } from 'lucide-react'
+import { CheckCircle, AlertCircle, Loader, ExternalLink, ChevronRight, Terminal } from 'lucide-react'
 import api from '../../api/client'
 import useProjectStore from '../../store/projectStore'
 
@@ -57,11 +57,26 @@ export default function ApiSetup({ onComplete }) {
         className="w-full max-w-md bg-card border border-border rounded-2xl p-6 shadow-2xl space-y-5"
       >
         <div>
-          <h2 className="text-lg font-semibold text-stone-200 flex items-center gap-2">
-            🔑 Google Cloud 연결
-            <span className="text-xs text-stone-500 font-normal">(처음 한 번만)</span>
-          </h2>
-          <p className="text-xs text-stone-500 mt-1">Vertex AI 서비스 계정으로 인증합니다</p>
+          <h2 className="text-lg font-semibold text-stone-200">Google Cloud 연결</h2>
+          <p className="text-xs text-stone-500 mt-0.5">본인 Google 계정으로 인증합니다 (ADC)</p>
+        </div>
+
+        {/* Step 0: auth.bat 강조 */}
+        <div className="bg-orange-500/8 border border-orange-500/25 rounded-xl p-3">
+          <div className="flex items-center gap-2 text-xs font-semibold text-orange-400 mb-2">
+            <Terminal size={13} />
+            처음 실행하는 경우 — 먼저 로그인 스크립트를 실행하세요
+          </div>
+          <div className="grid grid-cols-2 gap-2 text-xs font-mono">
+            <div className="bg-primary rounded-lg px-2.5 py-2 text-stone-300">
+              <span className="text-stone-500 text-[10px] block mb-0.5">Windows</span>
+              auth.bat
+            </div>
+            <div className="bg-primary rounded-lg px-2.5 py-2 text-stone-300">
+              <span className="text-stone-500 text-[10px] block mb-0.5">Mac / Linux</span>
+              bash auth.sh
+            </div>
+          </div>
         </div>
 
         {/* Project ID */}
@@ -85,35 +100,35 @@ export default function ApiSetup({ onComplete }) {
           </a>
         </div>
 
-        {/* ADC 인증 안내 */}
-        <div className="bg-elevated border border-border rounded-xl p-3 space-y-2">
-          <div className="flex items-center gap-2 text-xs text-stone-400 font-medium">
-            <Info size={14} className="text-orange-400" />
-            인증 설정 — gcloud ADC (JSON 키 불필요)
-          </div>
-          <ol className="text-xs text-stone-500 space-y-1.5 list-decimal list-inside">
+        {/* 수동 설정 안내 (접기) */}
+        <details className="group">
+          <summary className="cursor-pointer text-xs text-stone-500 hover:text-stone-400 select-none list-none flex items-center gap-1">
+            <ChevronRight size={12} className="group-open:rotate-90 transition-transform" />
+            수동 설정 (터미널에서 직접 입력)
+          </summary>
+          <ol className="mt-2 text-xs text-stone-500 space-y-1.5 list-decimal list-inside pl-1">
             <li>
               <a href="https://cloud.google.com/sdk/docs/install" target="_blank" rel="noopener noreferrer"
                 className="text-orange-400 hover:text-orange-300">Google Cloud CLI 설치</a>
             </li>
-            <li>터미널에서 실행:
-              <div className="mt-1 ml-4 font-mono bg-primary rounded px-2 py-1 text-stone-300 select-all">
+            <li>로그인:
+              <div className="mt-1 ml-4 font-mono bg-primary rounded px-2 py-1 text-stone-300 select-all text-[11px]">
                 gcloud auth application-default login
               </div>
             </li>
             <li>프로젝트 지정:
-              <div className="mt-1 ml-4 font-mono bg-primary rounded px-2 py-1 text-stone-300 select-all">
-                gcloud auth application-default set-quota-project {'{PROJECT_ID}'}
+              <div className="mt-1 ml-4 font-mono bg-primary rounded px-2 py-1 text-stone-300 select-all text-[11px]">
+                gcloud auth application-default set-quota-project PROJECT_ID
               </div>
             </li>
           </ol>
-        </div>
+        </details>
 
         {/* Error */}
         {status === 'error' && (
           <div className="flex items-start gap-2 p-3 bg-red-500/10 border border-red-500/30 rounded-xl text-red-400 text-xs">
             <AlertCircle size={14} className="shrink-0 mt-0.5" />
-            <span>{message}</span>
+            <span className="whitespace-pre-line">{message}</span>
           </div>
         )}
 
@@ -125,7 +140,7 @@ export default function ApiSetup({ onComplete }) {
         >
           {status === 'loading' && <Loader size={15} className="animate-spin" />}
           {status === 'success' && <CheckCircle size={15} className="text-green-300" />}
-          {status === 'idle'    && <ChevronRight size={15} />}
+          {(status === 'idle' || status === 'error') && <ChevronRight size={15} />}
           {status === 'loading' ? 'Vertex AI 연결 확인 중...'
             : status === 'success' ? '연결 성공!'
             : '연결 확인 후 시작하기'}
@@ -138,12 +153,12 @@ export default function ApiSetup({ onComplete }) {
         className="mt-6 text-center space-y-2"
       >
         <div className="flex flex-wrap justify-center gap-2">
-          {['🎵 Lyria 3 Pro', '🖼️ Nano Banana 2', '🎬 Veo 3.1 Fast'].map((chip) => (
+          {['Lyria 3 Pro', 'Nano Banana 2', 'Veo 3.1 Fast'].map((chip) => (
             <span key={chip} className="px-3 py-1 rounded-full bg-elevated border border-border text-xs text-stone-400">{chip}</span>
           ))}
         </div>
-        <p className="text-xs text-stone-500">✦ $300 무료 크레딧으로 뮤직비디오 약 <span className="text-stone-300">23편</span></p>
-        <p className="text-xs text-yellow-600/80">⚠️ 유료 업그레이드만 안 하면 청구되지 않습니다</p>
+        <p className="text-xs text-stone-500">$300 무료 크레딧으로 뮤직비디오 약 <span className="text-stone-300">23편</span></p>
+        <p className="text-xs text-yellow-600/80">유료 업그레이드만 안 하면 청구되지 않습니다</p>
       </motion.div>
     </div>
   )
