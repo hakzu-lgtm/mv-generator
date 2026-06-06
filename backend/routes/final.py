@@ -28,6 +28,52 @@ TRANSITION_STYLES = {
 }
 
 
+def _get_video_duration(path: str) -> float:
+    """Return video duration in seconds via ffprobe."""
+    import json as _json
+    result = subprocess.run(
+        ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+         "-of", "json", path],
+        capture_output=True, text=True, timeout=60,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f"ffprobe failed on {path}: {result.stderr[:200]}")
+    return float(_json.loads(result.stdout)["format"]["duration"])
+
+
+def _fit_to_music_duration(video_path: str, music_path: str, output_path: str):
+    """Pad (clone last frame) or speed-adjust video to match music duration."""
+    from utils.audio import get_audio_duration
+
+    vdur = _get_video_duration(video_path)
+    adur = get_audio_duration(music_path)
+    diff = adur - vdur
+    print(f"[FIT] video={vdur:.1f}s  music={adur:.1f}s  diff={diff:+.1f}s")
+
+    if diff > 1.0:
+        # Video shorter than music: clone last frame to fill the gap
+        _run_ffmpeg([
+            "ffmpeg", "-y", "-i", video_path,
+            "-vf", f"tpad=stop_mode=clone:stop_duration={diff:.3f}",
+            "-an",
+            "-c:v", "libx264", "-crf", "18", "-pix_fmt", "yuv420p",
+            output_path,
+        ], "fit_pad")
+    elif diff < -1.0:
+        # Video longer than music: speed up slightly to match
+        factor = vdur / adur
+        _run_ffmpeg([
+            "ffmpeg", "-y", "-i", video_path,
+            "-vf", f"setpts={1.0 / factor:.6f}*PTS",
+            "-an",
+            "-c:v", "libx264", "-crf", "18", "-pix_fmt", "yuv420p",
+            output_path,
+        ], "fit_speed")
+    else:
+        shutil.copy2(video_path, output_path)
+        print("[FIT] within 1s tolerance, no adjustment")
+
+
 def _run_ffmpeg(cmd: list, label: str, cwd: str = None):
     print(f"\n[FFMPEG CMD] {label}:")
     print("  " + " ".join(f'"{c}"' if (" " in c or "\\" in c) else c for c in cmd))
@@ -125,6 +171,17 @@ async def sse_final_generate(pid: str, subtitle_style: str, transition: str, cho
         ]
         await asyncio.to_thread(_run_ffmpeg, concat_cmd, "concat")
 
+        # ── 단계 3.5: 영상 길이를 음악 길이에 맞춤 ───────────────────
+        fitted_path = concat_path
+        if music_path:
+            try:
+                fitted_path = os.path.join(temp_dir, f"fitted_{pid}.mp4")
+                yield f"data: {json.dumps({'type': 'progress', 'step': 3, 'message': '영상 길이를 음악 기준으로 조정 중...'})}\n\n"
+                await asyncio.to_thread(_fit_to_music_duration, concat_path, music_path, fitted_path)
+            except Exception as fit_err:
+                print(f"[WARN] fit_to_music failed, using raw concat: {fit_err}")
+                fitted_path = concat_path
+
         # ── 단계 4: 음악 합성 ──────────────────────────────────────────
         if music_path:
             yield f"data: {json.dumps({'type': 'progress', 'step': 4, 'message': '음악 합성 중...'})}\n\n"
@@ -142,7 +199,7 @@ async def sse_final_generate(pid: str, subtitle_style: str, transition: str, cho
 
             music_cmd = [
                 "ffmpeg", "-y",
-                "-i", concat_path,
+                "-i", fitted_path,
                 "-i", music_abs,
                 "-map", "0:v:0",
                 "-map", "1:a:0",
@@ -191,7 +248,7 @@ async def sse_final_generate(pid: str, subtitle_style: str, transition: str, cho
             shutil.copy2(video_before_sub, final_path)
 
         # temp 정리
-        for p in [concat_path, with_audio_path, clip_list_path]:
+        for p in [concat_path, fitted_path, with_audio_path, clip_list_path]:
             try:
                 if os.path.exists(p):
                     os.remove(p)

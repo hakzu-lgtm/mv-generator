@@ -39,7 +39,8 @@ def build_lyria_prompt(lyrics_data: dict) -> str:
     return (
         f"{genre_str}, {bpm} BPM, "
         f"Korean vocals, {gender} voice, {style}, {inst_str}. "
-        f"Approximately 2 minutes long (about 120 seconds). "
+        f"Approximately 90 to 120 seconds long "
+        f"(1 minute 30 seconds to 2 minutes). "
         f"Song structure: intro, verse 1, chorus, verse 2, chorus, outro. "
         f"Strong catchy hook in the chorus, chorus energy 2x verse. "
         f"Professional studio recording quality."

@@ -22,6 +22,15 @@ SYSTEM_PROMPT = """당신은 뮤직비디오 스토리보드 작가입니다.
   예: 매 코러스마다 같은 옥상에서 같은 포즈
 - 단, 조명/계절/감정만 점점 변화시켜 진행감 표현
 
+[씬 구성 규칙 — 반드시 준수]
+- scene_plan 은 정확히 10개의 씬으로 구성
+- 각 씬에 id(0~9), role 필드 부여
+  role 예시: intro, verse1a, verse1b, chorus, verse2a, verse2b, bridge, chorus_end, outro
+- 코러스 씬은 is_chorus: true, is_hook: true 로 표시
+- 코러스 첫 번째 등장: reuse_of: null (이 씬만 Veo 영상 생성)
+- 코러스 두 번째 이후: reuse_of: <첫 번째 코러스 id> (영상 재사용, Veo 미생성)
+  → reuse_of 씬은 클립을 복사하므로 비용이 0원
+
 [출력 - 반드시 JSON만 반환]
 {
   "logline": "한 줄 요약",
@@ -56,6 +65,8 @@ SYSTEM_PROMPT = """당신은 뮤직비디오 스토리보드 작가입니다.
   "hook_motif": "코러스마다 반복될 시각 모티프 설명 (영어)",
   "scene_plan": [
     {
+      "id": 0,
+      "role": "intro",
       "section": "인트로",
       "time": "00:00-00:12",
       "beat": "이 구간 스토리 내용",
@@ -65,7 +76,9 @@ SYSTEM_PROMPT = """당신은 뮤직비디오 스토리보드 작가입니다.
       "mood": "분위기",
       "camera": "camera movement description",
       "is_chorus": false,
-      "use_hook_motif": false
+      "is_hook": false,
+      "use_hook_motif": false,
+      "reuse_of": null
     }
   ]
 }"""
@@ -108,7 +121,9 @@ async def generate_story(req: StoryRequest):
 {lyrics_text}
 
 위 가사의 스토리보드를 JSON 형식으로 작성하세요.
-scene_plan은 가사의 각 섹션과 정확히 대응되어야 합니다."""
+scene_plan 은 정확히 10개의 씬으로 구성해야 합니다.
+코러스 씬이 여러 번 등장하면 첫 번째만 reuse_of: null,
+두 번째 이후는 reuse_of: <첫 코러스 id> 로 표시하세요."""
 
     try:
         raw   = generate_text(prompt, SYSTEM_PROMPT)

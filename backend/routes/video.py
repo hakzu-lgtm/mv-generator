@@ -1,5 +1,6 @@
 import json
 import os
+import shutil
 import asyncio
 import time
 from fastapi import APIRouter, HTTPException
@@ -199,7 +200,9 @@ def _generate_one_clip(prompt: str, img_path: str, clip_path: str) -> tuple:
 
 
 async def sse_video_generate(pid: str, scenes: list, char_base: str, style_kw: str):
-    total_seconds = len(scenes) * VEO_DURATION
+    reuse_count   = sum(1 for s in scenes if s.get("reuse_of") is not None)
+    unique_count  = len(scenes) - reuse_count
+    total_seconds = unique_count * VEO_DURATION
     total_cost    = total_seconds * VEO_COST_PER_S
 
     ok, _ = cost_guard.can_proceed(pid, total_cost)
@@ -207,7 +210,7 @@ async def sse_video_generate(pid: str, scenes: list, char_base: str, style_kw: s
         yield f"data: {json.dumps({'type': 'error', 'message': '안전 한도 초과'})}\n\n"
         return
 
-    yield f"data: {json.dumps({'type': 'start', 'total_scenes': len(scenes), 'estimated_cost': round(total_cost, 2), 'model': VEO_MODEL, 'scene_delay': SCENE_DELAY_SEC})}\n\n"
+    yield f"data: {json.dumps({'type': 'start', 'total_scenes': len(scenes), 'unique_scenes': unique_count, 'reuse_scenes': reuse_count, 'estimated_cost': round(total_cost, 2), 'model': VEO_MODEL, 'scene_delay': SCENE_DELAY_SEC})}\n\n"
 
     results          = []
     accumulated_cost = 0.0
@@ -215,9 +218,30 @@ async def sse_video_generate(pid: str, scenes: list, char_base: str, style_kw: s
     fail_n           = 0
 
     for i, scene in enumerate(scenes):
-        prompt    = build_video_prompt(scene, char_base, style_kw)
-        img_path  = config.project_path(pid, "04_images", f"scene_{i:03d}.png")
-        clip_path = config.project_path(pid, "05_clips",  f"clip_{i:03d}.mp4")
+        clip_path = config.project_path(pid, "05_clips", f"clip_{i:03d}.mp4")
+        reuse_of  = scene.get("reuse_of")
+
+        # ── 재사용 씬: 원본 클립 복사 (Veo 미호출) ───────────────────
+        if reuse_of is not None:
+            src_clip = config.project_path(pid, "05_clips", f"clip_{reuse_of:03d}.mp4")
+            if os.path.exists(src_clip) and os.path.getsize(src_clip) > 100:
+                shutil.copy2(src_clip, clip_path)
+                print(f"[REUSE] scene {i} <- scene {reuse_of} (copy)")
+                yield f"data: {json.dumps({'type': 'scene_done', 'scene': i, 'success': True, 'label': 'reuse', 'message': f'[REUSE] 씬 {i+1} <- 씬 {reuse_of+1} 재사용 (비용 0)', 'cost': 0, 'accumulated': round(accumulated_cost, 2)})}\n\n"
+                results.append({
+                    "scene_id": i, "file": os.path.basename(clip_path),
+                    "duration": float(VEO_DURATION), "is_chorus": scene.get("is_chorus", False),
+                    "section": scene.get("section", ""), "cost": 0,
+                    "success": True, "reused": True,
+                })
+                success_n += 1
+                continue
+            # 원본이 없으면 신규 생성으로 폴백 (reuse_of 무시)
+            print(f"[REUSE] source clip_{reuse_of:03d}.mp4 missing, generating fresh")
+
+        # ── 신규 생성: Veo 호출 ───────────────────────────────────────
+        prompt   = build_video_prompt(scene, char_base, style_kw)
+        img_path = config.project_path(pid, "04_images", f"scene_{i:03d}.png")
 
         yield f"data: {json.dumps({'type': 'progress', 'scene': i, 'total': len(scenes), 'message': f'씬 {i+1}/{len(scenes)} -- Veo 생성 중 (최대 {POLL_TIMEOUT//60}분)...'})}\n\n"
 
@@ -255,6 +279,7 @@ async def sse_video_generate(pid: str, scenes: list, char_base: str, style_kw: s
             "section":        scene.get("section", ""),
             "cost":           actual_duration * VEO_COST_PER_S if success else 0,
             "success":        success,
+            "reused":         False,
             "safety_blocked": safety_blocked if not success else False,
         })
 
