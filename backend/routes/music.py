@@ -36,7 +36,7 @@ def build_lyria_prompt(lyrics_data: dict) -> str:
     style = vocalist.get("style", "clear")
     inst_str = ", ".join(instruments) if instruments else "piano, strings, synth"
 
-    return (
+    base = (
         f"{genre_str}, {bpm} BPM, "
         f"Korean vocals, {gender} voice, {style}, {inst_str}. "
         f"Approximately 90 to 120 seconds long "
@@ -45,6 +45,21 @@ def build_lyria_prompt(lyrics_data: dict) -> str:
         f"Strong catchy hook in the chorus, chorus energy 2x verse. "
         f"Professional studio recording quality."
     )
+
+    # 실제 한국어 가사를 Lyria 프롬프트에 포함 — Lyria가 해당 가사를 노래하도록
+    lyrics_lines = lyrics_data.get("lyrics", [])
+    if lyrics_lines:
+        sections = []
+        for item in lyrics_lines:
+            sec  = item.get("section", "")
+            text = (item.get("text") or "").strip()
+            if text:
+                sections.append(f"[{sec}] {text}" if sec else text)
+        if sections:
+            lyrics_block = "\n".join(sections)
+            base += f"\n\nLyrics (Korean — please sing these exact words):\n{lyrics_block}"
+
+    return base
 
 
 async def sse_music_generate(pid: str, lyrics_data: dict):

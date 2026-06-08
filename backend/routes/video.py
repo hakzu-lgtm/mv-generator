@@ -50,7 +50,9 @@ SENSITIVE_REPLACE = {
 SAFETY_SUFFIX = (
     ", cinematic artistic composition, tasteful visuals, "
     "safe for all audiences, peaceful emotional tone, "
-    "poetic and metaphorical, non-violent"
+    "poetic and metaphorical, non-violent, "
+    "characters NOT singing or performing — natural facial expressions only, "
+    "mouth closed or in quiet conversation, no lip-sync, no open-mouth singing pose"
 )
 
 
@@ -85,6 +87,12 @@ def _veo_client():
     )
 
 
+NO_SINGING = (
+    "Characters are NOT singing — they have natural resting expressions, "
+    "exchange quiet glances or brief words, or simply react to the environment. "
+    "No open mouth singing, no mic, no performance stance."
+)
+
 def build_video_prompt(scene: dict, char_base: str, style_kw: str) -> str:
     section   = scene.get("section", "벌스")
     camera    = CAMERA_MAP.get(section, "medium shot, smooth movement")
@@ -95,7 +103,7 @@ def build_video_prompt(scene: dict, char_base: str, style_kw: str) -> str:
     mood_note = f" Scene mood: {mood}." if mood else ""
     return (
         f"{char_base}, {desc}, {camera}, {style_kw}, "
-        f"{energy}, 16:9, cinematic quality.{mood_note}"
+        f"{energy}, 16:9, cinematic quality.{mood_note} {NO_SINGING}"
     )
 
 

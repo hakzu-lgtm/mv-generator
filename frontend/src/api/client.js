@@ -70,7 +70,7 @@ export async function postSSE(url, body, onMessage, onError, onComplete) {
           try {
             const data = JSON.parse(line.slice(6))
             if (data.type === 'complete') { onComplete?.(data); return }
-            else if (data.type === 'error') { onError?.(new Error(data.message)); return }
+            else if (data.type === 'error') { onError?.(new Error(data.message), data); return }
             else { onMessage?.(data) }
           } catch { /* ignore */ }
         }

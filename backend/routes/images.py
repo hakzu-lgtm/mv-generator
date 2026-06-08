@@ -455,26 +455,19 @@ async def generate_character_sheet(req: CharacterSheetRequest):
     }
 
 
-@router.post("/asset-sheets")
-async def generate_asset_sheets(req: AssetSheetRequest):
-    """
-    스토리 기반 에셋 시트 3종 생성:
-    1) protagonist.png  — 주인공 (다양한 표정)
-    2) supporting.png   — 조연 (주인공 참조)
-    3) assets.png       — 배경+아이템 4K
-    """
+async def _sse_asset_sheets(pid: str, style: str):
+    """에셋 시트 3종 SSE 스트리밍 생성."""
     import traceback as _tb
 
     if not config.is_ready():
-        return {"success": False, "error": "Project ID가 설정되지 않았습니다",
-                "error_type": "ConfigError", "trace": ""}
+        yield f"data: {json.dumps({'type': 'error', 'message': 'Project ID가 설정되지 않았습니다', 'error_type': 'ConfigError', 'trace': ''})}\n\n"
+        return
 
     try:
-        pid        = req.project_id
-        style_kw   = STYLE_KEYWORDS.get(req.style, STYLE_KEYWORDS.get("2D일러스트", req.style))
+        style_kw   = STYLE_KEYWORDS.get(style, STYLE_KEYWORDS.get("2D일러스트", style))
         story_path = config.project_path(pid, "01_lyrics", "story.json")
 
-        print(f"[asset-sheet] 시작: project={pid} style={req.style!r} style_kw={style_kw[:60]!r}")
+        print(f"[asset-sheet] 시작: project={pid} style={style!r} style_kw={style_kw[:60]!r}")
 
         story = {}
         try:
@@ -524,7 +517,8 @@ async def generate_asset_sheets(req: AssetSheetRequest):
         max_cost = max(MODEL_COST.values()) * 3
         ok, _    = cost_guard.can_proceed(pid, max_cost)
         if not ok:
-            return {"success": False, "error": "안전 한도 초과", "error_type": "CostLimit", "trace": ""}
+            yield f"data: {json.dumps({'type': 'error', 'message': '안전 한도 초과', 'error_type': 'CostLimit', 'trace': ''})}\n\n"
+            return
 
         results    = []
         all_errors = []
@@ -547,66 +541,73 @@ async def generate_asset_sheets(req: AssetSheetRequest):
                 _create_char_placeholder(path, label)
             return model_used, err_msg
 
-        prot_name = (protagonist.get("name") or "protagonist").strip()
-        prot_path = config.project_path(pid, "03_characters", "protagonist.png")
+        # Sheet 1: 주인공
+        prot_name   = (protagonist.get("name") or "protagonist").strip()
+        prot_path   = config.project_path(pid, "03_characters", "protagonist.png")
+        prot_prompt = build_character_sheet_prompt(style, prot_name, prot_desc)
 
-        prot_prompt = build_character_sheet_prompt(req.style, prot_name, prot_desc)
+        yield f"data: {json.dumps({'type': 'progress', 'message': '주인공 레퍼런스 시트 생성 중... (1/3)', 'index': 0, 'total': 3})}\n\n"
         used_model, err = await asyncio.to_thread(_run_sheet, "protagonist", prot_path, prot_prompt, None, "4K")
-        results.append({
-            "type": "protagonist", "label": "주인공 레퍼런스 시트 (4K)",
-            "file": os.path.basename(prot_path),
-            "model": used_model or "placeholder",
-            "error": err,
-        })
+        sheet1 = {"type": "protagonist", "label": "주인공 레퍼런스 시트 (4K)",
+                  "file": os.path.basename(prot_path), "model": used_model or "placeholder", "error": err}
+        results.append(sheet1)
+        yield f"data: {json.dumps({'type': 'sheet_done', 'sheet': sheet1, 'index': 0})}\n\n"
         await asyncio.sleep(3)
 
-        supp_path  = config.project_path(pid, "03_characters", "supporting.png")
-        prot_ref   = [prot_path] if os.path.exists(prot_path) and os.path.getsize(prot_path) > 100 else None
-        supp_name  = (supporting.get("name") or "supporting character").strip()
-        supp_prompt = build_supporting_sheet_prompt(req.style, supp_name, supp_desc)
+        # Sheet 2: 조연
+        supp_path   = config.project_path(pid, "03_characters", "supporting.png")
+        prot_ref    = [prot_path] if os.path.exists(prot_path) and os.path.getsize(prot_path) > 100 else None
+        supp_name   = (supporting.get("name") or "supporting character").strip()
+        supp_prompt = build_supporting_sheet_prompt(style, supp_name, supp_desc)
+
+        yield f"data: {json.dumps({'type': 'progress', 'message': '조연 레퍼런스 시트 생성 중... (2/3)', 'index': 1, 'total': 3})}\n\n"
         used_model, err = await asyncio.to_thread(_run_sheet, "supporting", supp_path, supp_prompt, prot_ref)
-        results.append({
-            "type": "supporting", "label": "조연 레퍼런스 시트",
-            "file": os.path.basename(supp_path),
-            "model": used_model or "placeholder",
-            "error": err,
-        })
+        sheet2 = {"type": "supporting", "label": "조연 레퍼런스 시트",
+                  "file": os.path.basename(supp_path), "model": used_model or "placeholder", "error": err}
+        results.append(sheet2)
+        yield f"data: {json.dumps({'type': 'sheet_done', 'sheet': sheet2, 'index': 1})}\n\n"
         await asyncio.sleep(3)
 
+        # Sheet 3: 배경 & 소품
         assets_file   = config.project_path(pid, "03_characters", "assets.png")
-        assets_prompt = build_assets_sheet_prompt(req.style, _safe_settings_str(), _safe_items_str())
-        used_model, err = await asyncio.to_thread(_run_sheet, "assets", assets_file, assets_prompt, None, "4K")
-        results.append({
-            "type": "assets", "label": "배경 & 소품 무드보드 (4K)",
-            "file": os.path.basename(assets_file),
-            "model": used_model or "placeholder",
-            "error": err,
-        })
+        assets_prompt = build_assets_sheet_prompt(style, _safe_settings_str(), _safe_items_str())
 
-        meta = {"project_id": pid, "style": req.style, "sheets": results, "errors": all_errors}
+        yield f"data: {json.dumps({'type': 'progress', 'message': '배경 & 소품 무드보드 생성 중... (3/3)', 'index': 2, 'total': 3})}\n\n"
+        used_model, err = await asyncio.to_thread(_run_sheet, "assets", assets_file, assets_prompt, None, "4K")
+        sheet3 = {"type": "assets", "label": "배경 & 소품 무드보드 (4K)",
+                  "file": os.path.basename(assets_file), "model": used_model or "placeholder", "error": err}
+        results.append(sheet3)
+        yield f"data: {json.dumps({'type': 'sheet_done', 'sheet': sheet3, 'index': 2})}\n\n"
+
         try:
+            meta      = {"project_id": pid, "style": style, "sheets": results, "errors": all_errors}
             meta_path = config.project_path(pid, "03_characters", "asset_meta.json")
             with open(meta_path, "w", encoding="utf-8") as f:
                 json.dump(meta, f, ensure_ascii=False, indent=2)
         except Exception:
             pass
 
-        return {
-            "success":    True,
-            "sheets":     results,
-            "errors":     all_errors,
-            "total_cost": cost_guard.get_total(pid),
-        }
+        yield f"data: {json.dumps({'type': 'complete', 'sheets': results, 'errors': all_errors, 'total_cost': cost_guard.get_total(pid)})}\n\n"
 
     except Exception as e:
         tb_str = _tb.format_exc()
         print(f"[ASSET SHEET ERROR]\n{tb_str}")
-        return {
-            "success":    False,
-            "error":      str(e),
-            "error_type": type(e).__name__,
-            "trace":      tb_str[-2000:],
-        }
+        yield f"data: {json.dumps({'type': 'error', 'message': str(e), 'error_type': type(e).__name__, 'trace': tb_str[-2000:]})}\n\n"
+
+
+@router.post("/asset-sheets")
+async def generate_asset_sheets(req: AssetSheetRequest):
+    """
+    스토리 기반 에셋 시트 3종 SSE 스트리밍 생성:
+    1) protagonist.png  — 주인공 (4K)
+    2) supporting.png   — 조연
+    3) assets.png       — 배경+아이템 (4K)
+    """
+    return StreamingResponse(
+        _sse_asset_sheets(req.project_id, req.style),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @router.post("/generate-auto")

@@ -66,6 +66,7 @@ export default function Step3_Images() {
 
   const [charSheetLoading, setCharSheetLoading] = useState(false)
   const [assetError, setAssetError] = useState(null) // {error, error_type, trace}
+  const [assetLogs, setAssetLogs] = useState([])
 
   const handleCharSheet = () => {
     openGate(
@@ -74,36 +75,39 @@ export default function Step3_Images() {
       async () => {
         setCharSheetLoading(true)
         setAssetError(null)
-        try {
-          const res  = await api.post('/images/asset-sheets', {
-            project_id: projectId, style: selectedStyle,
-          }, { timeout: 180000 })
-          const data = res.data
-
-          // 백엔드가 success:false로 반환한 경우 (500 대신 에러 노출)
-          if (data.success === false) {
-            setAssetError({ error: data.error, error_type: data.error_type, trace: data.trace })
-            toast.error(`에셋 시트 실패: ${data.error_type} — ${data.error?.slice(0, 80)}`, { duration: 8000 })
-            return
+        setAssetLogs([])
+        setCharViews([])
+        await postSSE(
+          '/api/images/asset-sheets',
+          { project_id: projectId, style: selectedStyle },
+          (data) => {
+            if (data.type === 'progress') {
+              setAssetLogs(l => [...l, data.message])
+            } else if (data.type === 'sheet_done') {
+              const s = data.sheet
+              setCharViews(prev => [...prev, { view: s.type, label: s.label, file: s.file, model: s.model, error: s.error }])
+            }
+          },
+          (err, errData) => {
+            setAssetError({ error: err.message, error_type: errData?.error_type || 'HTTPError', trace: errData?.trace || '' })
+            toast.error(`에셋 시트 에러: ${err.message}`, { duration: 8000 })
+            console.error('[asset-sheets error]', err)
+            setCharSheetLoading(false)
+          },
+          async (data) => {
+            const sheets = data.sheets || []
+            setCharViews(sheets.map(s => ({ view: s.type, label: s.label, file: s.file, model: s.model, error: s.error })))
+            setCharSheetDone(true)
+            await refreshCost()
+            const failed = sheets.filter(s => s.model === 'placeholder')
+            if (failed.length > 0) {
+              toast(`에셋 시트 부분 완료 (${failed.length}개 플레이스홀더)\n에러: ${data.errors?.join(' | ')?.slice(0, 120)}`, { duration: 6000 })
+            } else {
+              toast.success('에셋 시트 생성 완료!')
+            }
+            setCharSheetLoading(false)
           }
-
-          const sheets = data.sheets || []
-          setCharViews(sheets.map(s => ({ view: s.type, label: s.label, file: s.file, model: s.model, error: s.error })))
-          setCharSheetDone(true)
-          await refreshCost()
-          const failed = sheets.filter(s => s.model === 'placeholder')
-          if (failed.length > 0) {
-            toast(`에셋 시트 부분 완료 (${failed.length}개 플레이스홀더)\n에러: ${data.errors?.join(' | ')?.slice(0, 120)}`, { duration: 6000 })
-          } else {
-            toast.success('에셋 시트 생성 완료!')
-          }
-        } catch (e) {
-          setAssetError({ error: e.message, error_type: 'HTTPError', trace: e.response?.data ? JSON.stringify(e.response.data, null, 2) : '' })
-          toast.error(`에셋 시트 HTTP 에러: ${e.message}`, { duration: 8000 })
-          console.error('[asset-sheets error]', e)
-        } finally {
-          setCharSheetLoading(false)
-        }
+        )
       }
     )
   }
@@ -256,7 +260,7 @@ export default function Step3_Images() {
             {character && (
               <button onClick={handleCharSheet} disabled={charSheetDone || charSheetLoading}
                 className="flex-1 py-2.5 rounded-xl btn-primary text-white text-sm font-medium disabled:opacity-50 flex items-center justify-center gap-2">
-                {charSheetLoading ? <><Loader size={14} className="animate-spin" />생성 중 (최대 2분)...</>
+                {charSheetLoading ? <><Loader size={14} className="animate-spin" />생성 중 (최대 5~10분)...</>
                   : charSheetDone ? <><CheckCircle size={14} />에셋 시트 완성</>
                   : '★ 에셋 시트 생성 (주인공+조연+배경 4K)'}
               </button>
@@ -289,7 +293,16 @@ export default function Step3_Images() {
             </div>
           )}
 
-          {/* 에셋 시트 에러 상세 — success:false 반환 시 표시 */}
+          {/* 에셋 시트 생성 중 진행 로그 */}
+          {charSheetLoading && assetLogs.length > 0 && (
+            <div className="mt-3 rounded-xl bg-stone-900/50 border border-stone-700/50 p-3 space-y-1 max-h-20 overflow-y-auto">
+              {assetLogs.map((log, i) => (
+                <p key={i} className={`text-xs ${i === assetLogs.length - 1 ? 'text-stone-300' : 'text-stone-500'}`}>{log}</p>
+              ))}
+            </div>
+          )}
+
+          {/* 에셋 시트 에러 상세 */}
           {assetError && (
             <div className="mt-3 rounded-xl border border-red-500/30 bg-red-500/5 p-3 space-y-2">
               <p className="text-xs font-semibold text-red-400">
@@ -301,12 +314,20 @@ export default function Step3_Images() {
                   {assetError.trace}
                 </pre>
               )}
-              <button
-                onClick={() => setAssetError(null)}
-                className="text-xs text-stone-500 hover:text-stone-300 transition-colors"
-              >
-                닫기
-              </button>
+              <div className="flex gap-3">
+                <button
+                  onClick={() => { setAssetError(null); handleCharSheet() }}
+                  className="text-xs text-orange-400 hover:text-orange-300 transition-colors font-medium"
+                >
+                  재시도
+                </button>
+                <button
+                  onClick={() => setAssetError(null)}
+                  className="text-xs text-stone-500 hover:text-stone-300 transition-colors"
+                >
+                  닫기
+                </button>
+              </div>
             </div>
           )}
 

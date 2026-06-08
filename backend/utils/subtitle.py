@@ -61,22 +61,84 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
     return output_path
 
 
-def _scale_lyrics(lyrics: list, music_duration: float) -> list:
-    expected_total = max((item.get("time_end", 0) for item in lyrics), default=0)
-    scale = music_duration / expected_total if expected_total > 0 else 1.0
-    return [
-        {
-            **item,
-            "time_start": item.get("time_start", 0) * scale,
-            "time_end":   item.get("time_end", item.get("time_start", 0) + 3) * scale,
-        }
-        for item in lyrics
+# 섹션 타입별 시간 가중치 (줄 수 × 가중치 → 전체 비율 결정)
+_SECTION_WEIGHTS = {
+    "인트로":   0.5,   # 짧은 기악 인트로
+    "벌스":     1.8,
+    "벌스1":    1.8,
+    "벌스2":    1.8,
+    "코러스":   2.2,   # 코러스는 반복/강조로 더 긴 체감
+    "브릿지":   1.2,
+    "아웃트로": 0.5,
+}
+_INTRO_OFFSET_RATIO = 0.04   # 전체 길이의 4% = 기악 인트로 여유
+
+
+def _section_weight(section: str, is_chorus: bool) -> float:
+    if is_chorus:
+        return _SECTION_WEIGHTS["코러스"]
+    s = section.lower()
+    for key, w in _SECTION_WEIGHTS.items():
+        if key in s or s.startswith(key[:3]):
+            return w
+    return 1.5
+
+
+def _redistribute_lyrics(lyrics: list, music_duration: float) -> list:
+    """
+    섹션 구조를 인식해 타임스탬프를 재분배.
+    단순 비례 스케일링 대신 섹션 타입별 가중치로 각 구간 길이를 결정한다.
+    """
+    if not lyrics:
+        return []
+
+    # 연속된 섹션으로 그룹화
+    groups: list = []
+    cur_key = None
+    cur_grp: list = []
+    for line in lyrics:
+        key = (line.get("section", ""), bool(line.get("is_chorus")))
+        if key != cur_key:
+            if cur_grp:
+                groups.append(cur_grp)
+            cur_key = key
+            cur_grp = [line]
+        else:
+            cur_grp.append(line)
+    if cur_grp:
+        groups.append(cur_grp)
+
+    # 각 그룹의 가중치 계산
+    weights = [
+        _section_weight(g[0].get("section", ""), bool(g[0].get("is_chorus"))) * len(g)
+        for g in groups
     ]
+    total_w = sum(weights) or 1.0
+
+    intro_gap = music_duration * _INTRO_OFFSET_RATIO
+    available  = music_duration - intro_gap
+
+    result = []
+    t = intro_gap
+    for grp, w in zip(groups, weights):
+        sec_dur  = (w / total_w) * available
+        line_dur = sec_dur / len(grp)
+        for j, line in enumerate(grp):
+            t_start = t + j * line_dur
+            t_end   = min(t_start + line_dur * 0.90, music_duration - 0.1)
+            result.append({
+                **line,
+                "time_start": round(t_start, 2),
+                "time_end":   round(t_end,   2),
+            })
+        t += sec_dur
+
+    return result
 
 
 def build_synced_srt(lyrics: list, music_duration: float, output_path: str) -> str:
-    """가사 타임스탬프를 실제 음악 길이에 맞게 스케일링해 SRT 생성."""
-    return generate_srt(_scale_lyrics(lyrics, music_duration) if lyrics else [], output_path)
+    """가사 타임스탬프를 섹션 구조 기반으로 재분배해 SRT 생성."""
+    return generate_srt(_redistribute_lyrics(lyrics, music_duration) if lyrics else [], output_path)
 
 
 def build_synced_ass(
@@ -85,9 +147,9 @@ def build_synced_ass(
     output_path: str,
     chorus_color: bool = True,
 ) -> str:
-    """가사 타임스탬프를 실제 음악 길이에 맞게 스케일링해 ASS 생성."""
+    """가사 타임스탬프를 섹션 구조 기반으로 재분배해 ASS 생성."""
     return generate_ass(
-        _scale_lyrics(lyrics, music_duration) if lyrics else [],
+        _redistribute_lyrics(lyrics, music_duration) if lyrics else [],
         output_path,
         chorus_color,
     )
