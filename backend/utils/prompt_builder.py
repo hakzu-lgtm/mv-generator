@@ -688,7 +688,7 @@ def build_assets_sheet_prompt(style: str, settings_str: str, items_str: str) -> 
         f"PROPS section — key story items: {items_str}\n\n"
         "Clean reference-sheet layout, consistent art style throughout, "
         "white background, clearly labeled sections.\n\n"
-        f"{qtail}, 4K"
+        f"{qtail}, 2K"
     )
 
 

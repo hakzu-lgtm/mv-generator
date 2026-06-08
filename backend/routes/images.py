@@ -547,8 +547,8 @@ async def _sse_asset_sheets(pid: str, style: str):
         prot_prompt = build_character_sheet_prompt(style, prot_name, prot_desc)
 
         yield f"data: {json.dumps({'type': 'progress', 'message': '주인공 레퍼런스 시트 생성 중... (1/3)', 'index': 0, 'total': 3})}\n\n"
-        used_model, err = await asyncio.to_thread(_run_sheet, "protagonist", prot_path, prot_prompt, None, "4K")
-        sheet1 = {"type": "protagonist", "label": "주인공 레퍼런스 시트 (4K)",
+        used_model, err = await asyncio.to_thread(_run_sheet, "protagonist", prot_path, prot_prompt, None, "2K")
+        sheet1 = {"type": "protagonist", "label": "주인공 레퍼런스 시트 (2K)",
                   "file": os.path.basename(prot_path), "model": used_model or "placeholder", "error": err}
         results.append(sheet1)
         yield f"data: {json.dumps({'type': 'sheet_done', 'sheet': sheet1, 'index': 0})}\n\n"
@@ -573,8 +573,8 @@ async def _sse_asset_sheets(pid: str, style: str):
         assets_prompt = build_assets_sheet_prompt(style, _safe_settings_str(), _safe_items_str())
 
         yield f"data: {json.dumps({'type': 'progress', 'message': '배경 & 소품 무드보드 생성 중... (3/3)', 'index': 2, 'total': 3})}\n\n"
-        used_model, err = await asyncio.to_thread(_run_sheet, "assets", assets_file, assets_prompt, None, "4K")
-        sheet3 = {"type": "assets", "label": "배경 & 소품 무드보드 (4K)",
+        used_model, err = await asyncio.to_thread(_run_sheet, "assets", assets_file, assets_prompt, None, "2K")
+        sheet3 = {"type": "assets", "label": "배경 & 소품 무드보드 (2K)",
                   "file": os.path.basename(assets_file), "model": used_model or "placeholder", "error": err}
         results.append(sheet3)
         yield f"data: {json.dumps({'type': 'sheet_done', 'sheet': sheet3, 'index': 2})}\n\n"
@@ -599,9 +599,9 @@ async def _sse_asset_sheets(pid: str, style: str):
 async def generate_asset_sheets(req: AssetSheetRequest):
     """
     스토리 기반 에셋 시트 3종 SSE 스트리밍 생성:
-    1) protagonist.png  — 주인공 (4K)
-    2) supporting.png   — 조연
-    3) assets.png       — 배경+아이템 (4K)
+    1) protagonist.png  — 주인공 (2K)
+    2) supporting.png   — 조연 (2K)
+    3) assets.png       — 배경+아이템 (2K)
     """
     return StreamingResponse(
         _sse_asset_sheets(req.project_id, req.style),
