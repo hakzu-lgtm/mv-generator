@@ -12,6 +12,11 @@ export default function AudioPlayer({ src, title = '음악', duration = 0, bpm =
   useEffect(() => {
     const audio = audioRef.current
     if (!audio) return
+    // src가 바뀌면 에러 상태 초기화하고 다시 로드
+    setHasError(false)
+    setPlaying(false)
+    setCurrentTime(0)
+    audio.load()
     const onTime = () => setCurrentTime(audio.currentTime)
     const onMeta = () => setAudioDuration(audio.duration || duration)
     const onEnd = () => setPlaying(false)
@@ -30,15 +35,22 @@ export default function AudioPlayer({ src, title = '음악', duration = 0, bpm =
 
   const toggle = async () => {
     const audio = audioRef.current
-    if (!audio || hasError) return
+    if (!audio) return
     if (playing) {
       audio.pause()
       setPlaying(false)
     } else {
+      // 에러 상태면 재로드 후 재시도
+      if (hasError) {
+        setHasError(false)
+        audio.load()
+        await new Promise((r) => setTimeout(r, 300))
+      }
       try {
         await audio.play()
         setPlaying(true)
       } catch (e) {
+        console.warn('[AudioPlayer] play() failed:', e)
         setHasError(true)
       }
     }
@@ -84,7 +96,6 @@ export default function AudioPlayer({ src, title = '음악', duration = 0, bpm =
         <button
           onClick={toggle}
           className="w-9 h-9 rounded-full btn-primary flex items-center justify-center shrink-0"
-          disabled={hasError}
         >
           {playing ? <Pause size={14} className="text-white" /> : <Play size={14} className="text-white ml-0.5" />}
         </button>

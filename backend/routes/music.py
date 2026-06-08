@@ -25,6 +25,70 @@ GENRE_MAP = {
     "록": "Korean rock, electric guitar",
 }
 
+# 안전 필터 트리거 단어 → 순화 표현 (음악 프롬프트용)
+MUSIC_SENSITIVE_REPLACE = {
+    # 영문
+    "dark": "deep", "darkness": "depth", "death": "stillness",
+    "dead": "quiet", "die": "fade", "dying": "fading",
+    "kill": "stop", "killed": "ended", "killing": "ending",
+    "violent": "intense", "violence": "tension",
+    "hate": "strong emotion", "rage": "passion",
+    "anger": "intensity", "angry": "fierce",
+    "revenge": "resolution", "war": "conflict",
+    "fight": "struggle", "blood": "red",
+    "weapon": "object", "gun": "object", "knife": "edge",
+    "murder": "mystery", "cruel": "cold",
+    "evil": "shadow", "demon": "spirit",
+    "explicit": "expressive", "aggressive": "powerful",
+    "brutal": "forceful", "savage": "raw",
+    # 한국어
+    "죽음": "이별", "죽어": "사라져", "죽을": "잃을",
+    "피": "붉은", "살인": "이야기", "복수": "화해",
+    "폭력": "갈등", "잔인": "냉정", "증오": "열정",
+    "분노": "강렬함", "전쟁": "갈등", "총": "물체",
+    "칼": "도구", "살해": "사건", "지옥": "그림자",
+}
+
+
+def _sanitize_music_prompt(prompt: str, level: int) -> str:
+    """level 0: 단어 치환, 1: 치환+평화 수식어, 2: 장르/BPM/무드 키워드만 추출"""
+    if level == 0:
+        result = prompt
+        for bad, safe in MUSIC_SENSITIVE_REPLACE.items():
+            result = result.replace(bad, safe)
+        return result
+
+    if level == 1:
+        result = prompt
+        for bad, safe in MUSIC_SENSITIVE_REPLACE.items():
+            result = result.replace(bad, safe)
+        return result + (
+            ", uplifting emotional tone, heartfelt, gentle, "
+            "tasteful, safe for all audiences, soothing melody"
+        )
+
+    # level 2: 순수 음악 기술 키워드만 (안전 최소 프롬프트)
+    lines = [l.strip() for l in prompt.split(",") if l.strip()]
+    safe_keywords = []
+    unsafe_terms = set(MUSIC_SENSITIVE_REPLACE.keys())
+    for part in lines:
+        low = part.lower()
+        if not any(t in low for t in unsafe_terms):
+            safe_keywords.append(part)
+    fallback = ", ".join(safe_keywords[:6]) if safe_keywords else "K-pop, 120 BPM"
+    return (
+        f"{fallback}, bright mood, professional studio quality, "
+        f"melodic hook, emotional vocals, safe for all audiences"
+    )
+
+
+def _is_safety_error_music(err: str) -> bool:
+    return any(x in err for x in (
+        "sensitive", "invalid_request", "Prohibited Use",
+        "policy", "safety", "violat", "inappropriate",
+        "harmful", "400",
+    ))
+
 
 def build_lyria_prompt(lyrics_data: dict) -> str:
     genres = [GENRE_MAP.get(g, g) for g in lyrics_data.get("genre", ["K-POP"])]
@@ -36,30 +100,16 @@ def build_lyria_prompt(lyrics_data: dict) -> str:
     style = vocalist.get("style", "clear")
     inst_str = ", ".join(instruments) if instruments else "piano, strings, synth"
 
-    base = (
+    # 가사는 자막용으로만 사용 — Lyria에는 음악 스타일/분위기만 전달
+    prompt = (
         f"{genre_str}, {bpm} BPM, "
-        f"Korean vocals, {gender} voice, {style}, {inst_str}. "
-        f"Approximately 90 to 120 seconds long "
-        f"(1 minute 30 seconds to 2 minutes). "
-        f"Song structure: intro, verse 1, chorus, verse 2, chorus, outro. "
-        f"Strong catchy hook in the chorus, chorus energy 2x verse. "
-        f"Professional studio recording quality."
+        f"Korean {gender} vocals, {style} vocal style, {inst_str}. "
+        f"Approximately 90 to 120 seconds long. "
+        f"Song structure: intro, verse, chorus, verse, chorus, outro. "
+        f"Strong catchy hook in the chorus, dynamic energy build. "
+        f"Professional studio recording quality, broadcast-ready mix."
     )
-
-    # 실제 한국어 가사를 Lyria 프롬프트에 포함 — Lyria가 해당 가사를 노래하도록
-    lyrics_lines = lyrics_data.get("lyrics", [])
-    if lyrics_lines:
-        sections = []
-        for item in lyrics_lines:
-            sec  = item.get("section", "")
-            text = (item.get("text") or "").strip()
-            if text:
-                sections.append(f"[{sec}] {text}" if sec else text)
-        if sections:
-            lyrics_block = "\n".join(sections)
-            base += f"\n\nLyrics (Korean — please sing these exact words):\n{lyrics_block}"
-
-    return base
+    return prompt
 
 
 async def sse_music_generate(pid: str, lyrics_data: dict):
@@ -73,17 +123,45 @@ async def sse_music_generate(pid: str, lyrics_data: dict):
     await asyncio.sleep(0.5)
 
     try:
-        import traceback as _tb
         from services.lyria_service import generate_music as lyria_generate
 
-        prompt = build_lyria_prompt(lyrics_data)
-        yield f"data: {json.dumps({'type': 'progress', 'message': f'프롬프트: {prompt[:80]}...'})}\n\n"
+        base_prompt = build_lyria_prompt(lyrics_data)
+        yield f"data: {json.dumps({'type': 'progress', 'message': f'프롬프트: {base_prompt[:80]}...'})}\n\n"
         await asyncio.sleep(0.3)
 
         yield f"data: {json.dumps({'type': 'progress', 'message': 'Lyria 3 Pro 음악 생성 중... (최대 10분)'})}\n\n"
 
         wav_path = config.project_path(pid, "02_music", "music.wav")
-        wav_path, lyrics_text = await asyncio.to_thread(lyria_generate, prompt, wav_path)
+
+        # 3단계 안전필터 재시도
+        wav_path_result = None
+        lyrics_text = None
+        last_error = None
+        for level in range(3):
+            sanitized_prompt = _sanitize_music_prompt(base_prompt, level)
+            label = ["1차 (원본 순화)", "2차 (강화 순화)", "3차 (최소 키워드)"][level]
+            if level > 0:
+                yield f"data: {json.dumps({'type': 'progress', 'message': f'안전필터 감지 — {label} 시도 중...'})}\n\n"
+            try:
+                wav_path_result, lyrics_text = await asyncio.to_thread(
+                    lyria_generate, sanitized_prompt, wav_path
+                )
+                last_error = None
+                break
+            except Exception as e:
+                err_str = str(e)
+                last_error = e
+                if _is_safety_error_music(err_str):
+                    print(f"[MUSIC WARN] 안전필터 차단 ({label}): {err_str[:200]}")
+                    if level < 2:
+                        continue
+                raise
+
+        if last_error is not None:
+            raise RuntimeError(
+                "가사/주제에 민감한 표현이 있어 음악 생성이 거부되었어요. "
+                "가사를 부드럽게 수정해 주세요."
+            )
 
         # actual_lyrics.txt 저장 (Lyria가 텍스트 출력을 포함한 경우)
         if lyrics_text:
@@ -94,8 +172,8 @@ async def sse_music_generate(pid: str, lyrics_data: dict):
 
         mp3_path = config.project_path(pid, "02_music", "music.mp3")
         from utils.audio import wav_to_mp3, analyze_bpm, get_audio_duration
-        wav_to_mp3(wav_path, mp3_path)
-        os.remove(wav_path)
+        wav_to_mp3(wav_path_result, mp3_path)
+        os.remove(wav_path_result)
 
         duration = get_audio_duration(mp3_path)
         detected_bpm = analyze_bpm(mp3_path)
@@ -107,7 +185,7 @@ async def sse_music_generate(pid: str, lyrics_data: dict):
             "file": "music.mp3",
             "duration": duration,
             "bpm": detected_bpm,
-            "lyria_prompt": prompt,
+            "lyria_prompt": base_prompt,
             "cost": cost,
         }
         meta_path = config.project_path(pid, "02_music", "music_meta.json")
