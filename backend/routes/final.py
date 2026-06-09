@@ -225,13 +225,22 @@ async def preview_final(project_id: str):
 @router.post("/capcut/{project_id}")
 async def generate_capcut(project_id: str):
     from services.capcut_service import build_capcut_draft
+    import traceback as _tb
+
+    mp4_exists = os.path.exists(config.project_path(project_id, "07_final", "mv.mp4"))
 
     try:
         zip_path = await asyncio.to_thread(build_capcut_draft, project_id)
     except FileNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"CapCut 프로젝트 생성 실패: {str(e)}")
+        tb = _tb.format_exc()
+        print(f"[CAPCUT ERROR]\n{tb}")
+        # CapCut 실패해도 MP4가 있으면 다운로드 안내 포함
+        detail = f"CapCut 프로젝트 생성 실패: {str(e)}"
+        if mp4_exists:
+            detail += " | 완성 MP4는 '완성 영상' 탭에서 다운로드할 수 있습니다."
+        raise HTTPException(status_code=500, detail=detail)
 
     return {
         "success": True,
