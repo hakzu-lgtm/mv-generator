@@ -9,23 +9,8 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse, FileResponse
 from pydantic import BaseModel
 import config
-from utils.subtitle import generate_srt, generate_ass, build_synced_srt, build_synced_ass
 
 router = APIRouter(prefix="/api/final", tags=["final"])
-
-SUBTITLE_STYLES = {
-    "기본하단": "default",
-    "강조형": "emphasis",
-    "대형타이포": "large",
-    "섹션색상": "section_color",
-    "팝업": "popup",
-}
-
-TRANSITION_STYLES = {
-    "fade": "fade=t=in:st=0:d=0.5,fade=t=out:st=7.5:d=0.5",
-    "cut": "",
-    "slide": "slide=t=in:st=0:d=0.3",
-}
 
 
 def _get_video_duration(path: str) -> float:
@@ -42,7 +27,7 @@ def _get_video_duration(path: str) -> float:
 
 
 def _fit_to_music_duration(video_path: str, music_path: str, output_path: str):
-    """Pad (clone last frame) or speed-adjust video to match music duration."""
+    """마지막 프레임 정지화면으로 연장해 영상 길이를 음악 길이에 맞춤."""
     from utils.audio import get_audio_duration
 
     vdur = _get_video_duration(video_path)
@@ -50,18 +35,21 @@ def _fit_to_music_duration(video_path: str, music_path: str, output_path: str):
     diff = adur - vdur
     print(f"[FIT] video={vdur:.1f}s  music={adur:.1f}s  diff={diff:+.1f}s")
 
-    if diff > 1.0:
-        # Video shorter than music: clone last frame to fill the gap
+    if diff > 0.5:
+        # 부족분 + 0.5초 여유분을 정지화면으로 채움 → -shortest가 음악 끝에 맞춤
+        pad_dur = diff + 0.5
+        print(f"[FIT] tpad stop_duration={pad_dur:.3f}s (diff+0.5)")
         _run_ffmpeg([
             "ffmpeg", "-y", "-i", video_path,
-            "-vf", f"tpad=stop_mode=clone:stop_duration={diff:.3f}",
+            "-vf", f"tpad=stop_mode=clone:stop_duration={pad_dur:.3f}",
             "-an",
             "-c:v", "libx264", "-crf", "18", "-pix_fmt", "yuv420p",
             output_path,
         ], "fit_pad")
     elif diff < -1.0:
-        # Video longer than music: speed up slightly to match
+        # 영상이 음악보다 긴 경우: 약간 속도 조정
         factor = vdur / adur
+        print(f"[FIT] setpts factor={1.0/factor:.6f}")
         _run_ffmpeg([
             "ffmpeg", "-y", "-i", video_path,
             "-vf", f"setpts={1.0 / factor:.6f}*PTS",
@@ -71,7 +59,7 @@ def _fit_to_music_duration(video_path: str, music_path: str, output_path: str):
         ], "fit_speed")
     else:
         shutil.copy2(video_path, output_path)
-        print("[FIT] within 1s tolerance, no adjustment")
+        print("[FIT] within tolerance, no adjustment")
 
 
 def _run_ffmpeg(cmd: list, label: str, cwd: str = None):
@@ -93,16 +81,16 @@ def _run_ffmpeg(cmd: list, label: str, cwd: str = None):
     return result
 
 
-async def sse_final_generate(pid: str, subtitle_style: str, transition: str, chorus_gold: bool):
+async def sse_final_generate(pid: str):
     valid_clips = []
     try:
         # ── 단계 1: 클립 수집 ──────────────────────────────────────────
         yield f"data: {json.dumps({'type': 'progress', 'step': 1, 'message': '클립 타임라인 정렬 중...'})}\n\n"
         await asyncio.sleep(0.1)
 
-        clips_dir      = config.project_path(pid, "05_clips")
+        clips_dir       = config.project_path(pid, "05_clips")
         available_clips = sorted(_glob.glob(os.path.join(clips_dir, "clip_*.mp4")))
-        valid_clips    = [c for c in available_clips if os.path.getsize(c) > 100]
+        valid_clips     = [c for c in available_clips if os.path.getsize(c) > 100]
         if not valid_clips:
             yield f"data: {json.dumps({'type': 'error', 'message': '유효한 클립 없음. 4단계를 먼저 완료하세요.'})}\n\n"
             return
@@ -115,42 +103,10 @@ async def sse_final_generate(pid: str, subtitle_style: str, transition: str, cho
                 music_path = os.path.abspath(p)
                 break
 
-        # ── 단계 2: 자막 파일 생성 (음악 길이로 동기화) ──────────────
-        yield f"data: {json.dumps({'type': 'progress', 'step': 2, 'message': '자막 파일 생성 중...'})}\n\n"
-        await asyncio.sleep(0.1)
-
-        lyrics_path = config.project_path(pid, "01_lyrics", "lyrics.json")
-        srt_path    = config.project_path(pid, "06_subtitles", "subtitle.srt")
-        ass_path    = config.project_path(pid, "06_subtitles", "subtitle.ass")
-
-        lyrics = []
-        if os.path.exists(lyrics_path):
-            with open(lyrics_path, "r", encoding="utf-8") as f:
-                lyrics_data = json.load(f)
-            lyrics = lyrics_data.get("lyrics", [])
-
-        if lyrics:
-            music_duration = 0.0
-            if music_path:
-                try:
-                    from utils.audio import get_audio_duration
-                    music_duration = get_audio_duration(music_path)
-                except Exception:
-                    pass
-
-            if music_duration > 0:
-                build_synced_srt(lyrics, music_duration, srt_path)
-                build_synced_ass(lyrics, music_duration, ass_path, chorus_color=chorus_gold)
-                print(f"[INFO] 자막 동기화 완료: 음악 길이={music_duration:.1f}s")
-            else:
-                generate_srt(lyrics, srt_path)
-                generate_ass(lyrics, ass_path, chorus_color=chorus_gold)
-                print(f"[INFO] 자막 생성 완료 (동기화 없음): {srt_path}")
-
         temp_dir        = os.path.abspath(config.get_temp_path())
         clip_list_path  = os.path.join(temp_dir, f"clips_{pid}.txt")
         concat_path     = os.path.join(temp_dir, f"concat_{pid}.mp4")
-        with_audio_path = os.path.join(temp_dir, f"with_audio_{pid}.mp4")
+        fitted_path     = os.path.join(temp_dir, f"fitted_{pid}.mp4")
         final_path      = os.path.abspath(config.project_path(pid, "07_final", "mv.mp4"))
 
         with open(clip_list_path, "w", encoding="utf-8") as f:
@@ -158,113 +114,65 @@ async def sse_final_generate(pid: str, subtitle_style: str, transition: str, cho
                 abs_path = os.path.abspath(clip).replace("\\", "/")
                 f.write(f"file '{abs_path}'\n")
 
-        # ── 단계 3: 클립 concat ────────────────────────────────────────
-        yield f"data: {json.dumps({'type': 'progress', 'step': 3, 'message': f'{len(valid_clips)}개 클립 concat 중...'})}\n\n"
+        # ── 단계 2: 클립 concat ────────────────────────────────────────
+        yield f"data: {json.dumps({'type': 'progress', 'step': 2, 'message': f'{len(valid_clips)}개 클립 이어붙이는 중...'})}\n\n"
         await asyncio.sleep(0.1)
 
-        concat_cmd = [
+        await asyncio.to_thread(_run_ffmpeg, [
             "ffmpeg", "-y", "-f", "concat", "-safe", "0",
             "-i", clip_list_path,
             "-an",
             "-c:v", "libx264", "-crf", "18", "-pix_fmt", "yuv420p",
             concat_path,
-        ]
-        await asyncio.to_thread(_run_ffmpeg, concat_cmd, "concat")
+        ], "concat")
 
-        # ── 단계 3.5: 영상 길이를 음악 길이에 맞춤 ───────────────────
-        fitted_path = concat_path
+        # ── 단계 3: 영상 길이를 음악 길이까지 정지화면으로 채움 ───────
+        actual_fitted = concat_path
         if music_path:
             try:
-                fitted_path = os.path.join(temp_dir, f"fitted_{pid}.mp4")
-                yield f"data: {json.dumps({'type': 'progress', 'step': 3, 'message': '영상 길이를 음악 기준으로 조정 중...'})}\n\n"
+                yield f"data: {json.dumps({'type': 'progress', 'step': 3, 'message': '마지막 빈 구간 채우는 중 (음악 길이 기준)...'})}\n\n"
                 await asyncio.to_thread(_fit_to_music_duration, concat_path, music_path, fitted_path)
+                actual_fitted = fitted_path
             except Exception as fit_err:
-                print(f"[WARN] fit_to_music failed, using raw concat: {fit_err}")
-                fitted_path = concat_path
+                print(f"[WARN] fit_to_music 실패, concat 그대로 사용: {fit_err}")
 
-        # ── 단계 4: 음악 합성 ──────────────────────────────────────────
+        # ── 단계 4: 음악 합성 (자막 없음) ─────────────────────────────
         if music_path:
-            yield f"data: {json.dumps({'type': 'progress', 'step': 4, 'message': '음악 합성 중...'})}\n\n"
+            yield f"data: {json.dumps({'type': 'progress', 'step': 4, 'message': '음악 합성 중... (자막 없음)'})}\n\n"
             await asyncio.sleep(0.1)
 
-            music_abs = os.path.abspath(music_path).replace("\\", "/")
+            music_abs = music_path.replace("\\", "/")
             if not os.path.exists(music_abs):
                 raise RuntimeError(f"음악 파일 없음: {music_abs}")
             print(f"[MUSIC] {music_abs}  size={os.path.getsize(music_abs)}")
-            probe = subprocess.run(
-                ["ffprobe", "-v", "error", "-show_streams", "-select_streams", "a", music_abs],
-                capture_output=True, text=True,
-            )
-            print(f"[MUSIC AUDIO STREAM]\n{probe.stdout[:500]}")
 
-            music_cmd = [
+            await asyncio.to_thread(_run_ffmpeg, [
                 "ffmpeg", "-y",
-                "-i", fitted_path,
+                "-i", actual_fitted,
                 "-i", music_abs,
                 "-map", "0:v:0",
                 "-map", "1:a:0",
                 "-c:v", "libx264", "-pix_fmt", "yuv420p",
                 "-c:a", "aac", "-b:a", "320k",
                 "-shortest",
-                with_audio_path,
-            ]
-            await asyncio.to_thread(_run_ffmpeg, music_cmd, "music_mix")
-            print("[CHECK] with_audio.mp4 생성 완료")
-            video_before_sub = with_audio_path
-        else:
-            video_before_sub = concat_path
-
-        # ── 단계 5: 자막 합성 (실패 시 자막 없이 저장) ────────────────
-        yield f"data: {json.dumps({'type': 'progress', 'step': 5, 'message': '자막 합성 중...'})}\n\n"
-        await asyncio.sleep(0.1)
-
-        if lyrics and os.path.exists(srt_path):
-            srt_temp = os.path.join(temp_dir, os.path.basename(srt_path))
-            ass_temp = os.path.join(temp_dir, os.path.basename(ass_path))
-            shutil.copy2(srt_path, srt_temp)
-            shutil.copy2(ass_path, ass_temp)
-
-            sub_filter = (
-                f"ass={os.path.basename(ass_temp)}"
-                if chorus_gold
-                else f"subtitles={os.path.basename(srt_temp)}"
-            )
-            sub_cmd = [
-                "ffmpeg", "-y",
-                "-i", video_before_sub,
-                "-vf", sub_filter,
-                "-c:v", "libx264", "-crf", "18",
-                "-c:a", "copy",
                 final_path,
-            ]
-            try:
-                await asyncio.to_thread(_run_ffmpeg, sub_cmd, "subtitle", cwd=temp_dir)
-            except RuntimeError as sub_err:
-                warn_msg = str(sub_err)[:500]
-                print(f"[WARN] 자막 합성 실패 -- 소리 있는 버전으로 저장:\n{sub_err}")
-                yield f"data: {json.dumps({'type': 'warn', 'message': f'자막 합성 실패(자막 없이 저장): {warn_msg}'})}\n\n"
-                shutil.copy2(video_before_sub, final_path)
+            ], "music_mix")
+            print("[OK] 최종 영상 생성 완료 (자막 없음)")
         else:
-            shutil.copy2(video_before_sub, final_path)
+            shutil.copy2(actual_fitted, final_path)
+            print("[OK] 음악 없음 -- 영상만 저장")
 
         # temp 정리
-        for p in [concat_path, fitted_path, with_audio_path, clip_list_path]:
+        for p in [concat_path, fitted_path, clip_list_path]:
             try:
                 if os.path.exists(p):
                     os.remove(p)
             except Exception:
                 pass
-        if lyrics and os.path.exists(srt_path):
-            for p in [srt_temp, ass_temp]:
-                try:
-                    if os.path.exists(p):
-                        os.remove(p)
-                except Exception:
-                    pass
 
     except Exception as e:
         tb = traceback.format_exc()
-        print(f"[ERROR] sse_final_generate 예외:\n{tb}")
+        print(f"[ERROR] sse_final_generate:\n{tb}")
         yield f"data: {json.dumps({'type': 'error', 'message': str(e), 'traceback': tb})}\n\n"
         return
 
@@ -280,9 +188,6 @@ async def sse_final_generate(pid: str, subtitle_style: str, transition: str, cho
 
 class FinalRequest(BaseModel):
     project_id: str
-    subtitle_style: str = "기본하단"
-    transition: str = "fade"
-    chorus_gold: bool = True
 
 
 @router.post("/generate")
@@ -291,7 +196,7 @@ async def generate_final(req: FinalRequest):
         raise HTTPException(status_code=400, detail="API 키가 설정되지 않았습니다")
 
     return StreamingResponse(
-        sse_final_generate(req.project_id, req.subtitle_style, req.transition, req.chorus_gold),
+        sse_final_generate(req.project_id),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )

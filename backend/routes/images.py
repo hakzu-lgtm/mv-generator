@@ -343,6 +343,13 @@ JSON 배열로 반환:
     else:
         scenes = _default_scenes(style_kw)
 
+    # 씬 최대 12개 제한
+    if len(scenes) > 12:
+        print(f"[prepare] 씬 {len(scenes)}개 -> 12개로 제한")
+        scenes = scenes[:12]
+        for i, s in enumerate(scenes):
+            s["scene_id"] = i
+
     scenes_path = config.project_path(req.project_id, "04_images", "scenes.json")
     with open(scenes_path, "w", encoding="utf-8") as f:
         json.dump({"scenes": scenes, "style": req.style}, f, ensure_ascii=False, indent=2)

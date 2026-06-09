@@ -23,8 +23,8 @@ SYSTEM_PROMPT = """당신은 뮤직비디오 스토리보드 작가입니다.
 - 단, 조명/계절/감정만 점점 변화시켜 진행감 표현
 
 [씬 구성 규칙 — 반드시 준수]
-- scene_plan 은 정확히 10개의 씬으로 구성
-- 각 씬에 id(0~9), role 필드 부여
+- scene_plan 은 10~12개의 씬으로 구성 (최대 12개)
+- 각 씬에 id(0~11 범위), role 필드 부여
   role 예시: intro, verse1a, verse1b, chorus, verse2a, verse2b, bridge, chorus_end, outro
 - 코러스 씬은 is_chorus: true, is_hook: true 로 표시
 - 코러스 첫 번째 등장: reuse_of: null (이 씬만 Veo 영상 생성)
@@ -121,7 +121,7 @@ async def generate_story(req: StoryRequest):
 {lyrics_text}
 
 위 가사의 스토리보드를 JSON 형식으로 작성하세요.
-scene_plan 은 정확히 10개의 씬으로 구성해야 합니다.
+scene_plan 은 10~12개의 씬으로 구성하세요 (최대 12개).
 코러스 씬이 여러 번 등장하면 첫 번째만 reuse_of: null,
 두 번째 이후는 reuse_of: <첫 코러스 id> 로 표시하세요."""
 

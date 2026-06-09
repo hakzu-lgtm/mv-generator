@@ -12,7 +12,6 @@ import VideoPlayer from '../ui/VideoPlayer'
 import ProgressBar from '../ui/ProgressBar'
 import { useCostGuard } from '../../hooks/useCostGuard'
 
-const SUBTITLE_STYLES = ['기본하단', '강조형', '대형타이포', '섹션색상', '팝업']
 const TRANSITIONS = ['fade', 'cut', 'slide']
 
 const CAPCUT_PATH_WIN = '%LOCALAPPDATA%\\CapCut\\User Data\\Projects\\com.lveditor.draft\\'
@@ -23,9 +22,7 @@ export default function Step5_Final() {
   const { sessionCost, breakdown, refreshCost } = useCostGuard()
 
   // 설정
-  const [subtitleStyle, setSubtitleStyle] = useState('기본하단')
-  const [transition, setTransition]       = useState('fade')
-  const [chorusGold, setChorusGold]       = useState(true)
+  const [transition, setTransition] = useState('fade')
 
   // 출력 방식 선택
   const [outputMode, setOutputMode] = useState(null)  // null | 'mp4' | 'capcut'
@@ -52,7 +49,7 @@ export default function Step5_Final() {
 
     await postSSE(
       '/api/final/generate',
-      { project_id: projectId, subtitle_style: subtitleStyle, transition, chorus_gold: chorusGold },
+      { project_id: projectId },
       (data) => setMp4Logs((l) => [...l, { ...data, time: Date.now() }]),
       (err)  => { setMp4Error(err.message); setMp4Running(false) },
       async (data) => {
@@ -149,39 +146,8 @@ export default function Step5_Final() {
     <div className="bg-card border border-border rounded-2xl p-5 space-y-4">
       <h3 className="text-sm font-semibold text-stone-300">편집 설정</h3>
 
-      <div>
-        <label className="text-xs text-stone-500 mb-2 block">자막 스타일</label>
-        <div className="flex gap-2 flex-wrap">
-          {SUBTITLE_STYLES.map((s) => (
-            <button key={s} onClick={() => setSubtitleStyle(s)}
-              className={`px-3 py-1.5 rounded-lg text-xs border transition-all ${subtitleStyle === s ? 'border-stone-400/60 bg-stone-600/20 text-stone-200' : 'border-border text-stone-500 hover:border-stone-500'}`}>
-              {s}
-            </button>
-          ))}
-        </div>
-      </div>
-
-      <div>
-        <label className="text-xs text-stone-500 mb-2 block">씬 전환 효과</label>
-        <div className="flex gap-2">
-          {TRANSITIONS.map((t) => (
-            <button key={t} onClick={() => setTransition(t)}
-              className={`px-3 py-1.5 rounded-lg text-xs border transition-all ${transition === t ? 'border-amber-500 bg-amber-500/10 text-amber-300' : 'border-border text-stone-500 hover:border-stone-500'}`}>
-              {t}
-            </button>
-          ))}
-        </div>
-      </div>
-
-      <div className="flex items-center justify-between">
-        <div>
-          <p className="text-sm text-stone-300">코러스 자막 금색 강조</p>
-          <p className="text-xs text-stone-500">코러스 구간 자막을 금색으로 표시</p>
-        </div>
-        <button onClick={() => setChorusGold(!chorusGold)}
-          className={`relative w-12 h-6 rounded-full transition-colors ${chorusGold ? 'bg-yellow-500' : 'bg-stone-600'}`}>
-          <span className={`absolute top-1 w-4 h-4 bg-white rounded-full transition-all ${chorusGold ? 'left-7' : 'left-1'}`} />
-        </button>
+      <div className="bg-stone-700/30 border border-stone-600/40 rounded-xl px-4 py-3 text-xs text-stone-400 leading-relaxed">
+        자막은 포함되지 않습니다. 완성 후 CapCut에서 자막을 직접 추가하세요.
       </div>
     </div>
   )
